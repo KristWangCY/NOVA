@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "chainId": "nova-private-1",
+  "blockTimeMs": 1500,
+  "initialSupply": "1000000000000",
+  "transport": "private-network-required",
+  "faucetPasswordEnv": "NOVA_FAUCET_PASSWORD",
+  "validators": [
+    {
+      "url": "http://10.99.0.11:4101",
+      "listenHost": "10.99.0.11",
+      "port": 4101,
+      "passwordEnv": "NOVA_NODE1_PASSWORD"
+    },
+    {
+      "url": "http://10.99.0.12:4102",
+      "listenHost": "10.99.0.12",
+      "port": 4102,
+      "passwordEnv": "NOVA_NODE2_PASSWORD"
+    },
+    {
+      "url": "http://10.99.0.13:4103",
+      "listenHost": "10.99.0.13",
+      "port": 4103,
+      "passwordEnv": "NOVA_NODE3_PASSWORD"
+    }
+  ]
+}
