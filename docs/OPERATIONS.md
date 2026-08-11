@@ -1,8 +1,8 @@
-# NOVA v0.18 安全运维手册
+# NOVA v0.19 安全运维手册
 
-这份手册以当前“所有节点运行在同一台 Windows 电脑”的日常自用阶段为主，也记录 v0.18 私网多设备的远程诊断、备份和七日 readiness 入口。它不适用于公网部署。
+这份手册以当前“所有节点运行在同一台 Windows 电脑”的日常自用阶段为主，也记录 v0.19 私网多设备的远程诊断、备份和七日 readiness 入口。它不适用于公网部署。
 
-v0.18 已能生成多设备拓扑和单验证者 bundle，从受信任管理电脑验证远端签名状态、取得 quorum 链备份，在断电重启时清理非最终残留状态，恢复常见的持久化提议锁，在退出前排空后台写任务，以只读 preflight 区分首次初始化、停机、故障和恢复路径，并用一个遮罩密码命令让 NOVA Explorer 与 K&M 平台在不同本地端口同时运行；但在真实七日试用和三台实际设备验收完成前，日常流程仍以单机网络为准。多设备准备请严格按 [三设备部署手册](DEPLOYMENT.md) 操作。
+v0.19 已能生成多设备拓扑和单验证者 bundle，从受信任管理电脑验证远端签名状态、取得 quorum 链备份，在断电重启时清理非最终残留状态，恢复常见的持久化提议锁，在退出前排空后台写任务，以只读 preflight 区分首次初始化、停机、故障和恢复路径，并用遮罩密码命令分别启动网络和执行加密 CLI；所有者已完成真实 Day 1，但在七日试用和三台实际设备验收完成前，日常流程仍以单机网络为准。多设备准备请严格按 [三设备部署手册](DEPLOYMENT.md) 操作。
 
 ## 1. 首次创建
 
@@ -32,7 +32,7 @@ npm.cmd run nova:secure:prompt
 npm.cmd run nova:secure:prompt
 ```
 
-默认命令不会修改父 PowerShell 的 `NOVA_KEY_PASSWORD`，因此停止后无需手工清除。若自动化流程直接使用 `npm.cmd run nova:secure` 并自行设置该环境变量，则自动化流程必须在完成后清除它。
+默认命令不会修改父 PowerShell 的 `NOVA_KEY_PASSWORD`，因此停止后无需手工清除。另一个 PowerShell 中需要解锁私钥的命令使用 `npm.cmd run nova:cli:prompt -- <CLI_ARGS>`；它同样遮罩读取密码、以参数数组直接调用 CLI 并在退出后清理。若自动化流程直接使用 `npm.cmd run nova:secure` 或 `node src/cli.js` 并自行设置环境变量，则自动化流程必须在完成后清除它。
 
 看到三个节点都输出 `listening` 后再开始转账。NOVA Explorer 只应通过 `http://127.0.0.1:3100` 打开；K&M 继续使用 3000。启动器会先检查 3100 是否空闲，如需覆盖可在当前会话设置 `NOVA_EXPLORER_PORT`，但只能选择 1024–65535 且不能使用节点端口 4101–4103。正常停止使用一次 `Ctrl+C`，等待进程自行退出后再关机；不要看到端口关闭就立即强杀进程。节点会先停止接收新请求，再等待在途 gossip、同步、出块和投票锁恢复任务结束，最后才释放 `node.lock`。网络超时默认有界，正常排空可能需要数秒。
 
@@ -86,7 +86,7 @@ node src/cli.js doctor --deployment .nova/distributed --timeout 3000 --json
 先确认网络是 `HEALTHY`。以下命令只读取文件字节并计算 SHA-256，不会把文件内容或路径发送给节点：
 
 ```powershell
-node src/cli.js record create `
+npm.cmd run nova:cli:prompt -- record create `
   --key .nova/private/faucet-key.json `
   --file C:\path\to\file.pdf `
   --title "Document proof" `
@@ -150,7 +150,7 @@ node src/cli.js backup restore `
 | 错误 | 含义与处理 |
 | --- | --- |
 | `Password must contain at least 12 characters` | 密码过短；重新运行 `npm.cmd run nova:secure:prompt` 并输入至少 12 个字符。 |
-| `set $env:NOVA_KEY_PASSWORD` | 你运行了供自动化使用的底层入口；日常使用请改为 `npm.cmd run nova:secure:prompt`。 |
+| `set $env:NOVA_KEY_PASSWORD` | 你直接运行了需要解锁私钥的底层 CLI；日常操作请改为 `npm.cmd run nova:cli:prompt -- <CLI_ARGS>`。 |
 | `unable to decrypt keystore` | 密码错误或文件损坏；停止重试，核对密码与离线备份。 |
 | `node home is already in use` | 节点正在运行；不要删除锁，找到并停止原进程。 |
 | `ATTENTION REQUIRED` | 查看所有 `[FAIL]` 行；修复前不要转账或备份。 |

@@ -218,4 +218,14 @@
 - [x] 保留 `npm.cmd run nova:secure` 作为显式环境变量自动化入口，避免破坏现有脚本。
 - [x] 可注入的启动函数覆盖成功执行、短密码拒绝、动作期间可见和退出后环境清理。
 - [x] 文档明确 CLR/Node.js 管理内存无法获得物理清零保证，同用户或更高权限恶意进程不在本地启动器保护边界内。
-- [ ] 所有者仍需亲自运行遮罩入口、保管密码并创建 `.nova/private`；真正 Day 1 只在有意义交易及 readiness 证据最终确认后开始。
+- [x] 所有者已亲自运行遮罩入口、保管密码、创建 `.nova/private`，并以有意义的文件存证和自动备份完成真实 Day 1。
+
+## v0.19 真实 Day 1 操作反馈闭环
+
+- [x] 新增 `npm.cmd run nova:cli:prompt -- <CLI_ARGS>`，转账、存证和账户创建不再要求所有者复制环境变量与 BSTR 处理代码。
+- [x] 参数以 PowerShell 数组直接转发给 `src/cli.js`，不使用 `Invoke-Expression`、shell 字符串拼接或二次解析。
+- [x] CLI 遮罩入口复用短密码拒绝、动作期间环境可见、成功/异常后清理和 SecureString/BSTR 释放合同。
+- [x] `Backup head` 人类输出改为真正的 `blockHash`，不同的 `snapshotHash` 不再被误标成链头。
+- [x] setup 改用 lockfile 驱动的 `npm ci`，清除真实首次安装产生的 `nova-chain: file:..` 清单漂移。
+- [x] 所有修复均由临时数据或注入 action 验证，没有改写真实 Day 1 journal、备份、存证文件或私人网络。
+- [ ] 所有者仍需在之后六个连续日期各完成一项真实、有意义的交易或存证并登记 readiness。

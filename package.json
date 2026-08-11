@@ -1,6 +1,6 @@
 {
   "name": "nova-chain",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "NOVA: a self-hosted, permissioned blockchain prototype",
   "type": "module",
   "private": true,
@@ -12,9 +12,9 @@
   },
   "scripts": {
     "check": "node --check src/cli.js && node --check src/node.js && node --check src/core/signed-status.js && node --check src/runtime/storage.js && node --check src/runtime/topology.js && node --check src/runtime/node-config.js && node --check src/runtime/deployment.js && node --check src/runtime/remote-network.js && node --check src/runtime/readiness.js && node --check src/runtime/validator-bundle.js && node --check scripts/run-nova.js && node --check scripts/lib/explorer-launch.js && npm --prefix explorer run typecheck && npm --prefix explorer run lint",
-    "setup": "npm --prefix explorer install",
+    "setup": "npm --prefix explorer ci",
     "test": "npm run test:chain && npm --prefix explorer run test",
-    "test:chain": "node --test test/backup.test.js test/bundle.test.js test/cli.test.js test/consensus-liveness.test.js test/core.test.js test/crash-recovery.test.js test/doctor.test.js test/explorer-launch.test.js test/keystore.test.js test/lock.test.js test/network.test.js test/peer-auth.test.js test/readiness.test.js test/record-cli.test.js test/record.test.js test/remote-network.test.js test/secure-prompt.test.js test/secure-recovery.test.js test/signed-status.test.js test/topology.test.js",
+    "test:chain": "node --test test/backup.test.js test/bundle.test.js test/cli.test.js test/consensus-liveness.test.js test/core.test.js test/crash-recovery.test.js test/doctor.test.js test/explorer-launch.test.js test/keystore.test.js test/lock.test.js test/network.test.js test/peer-auth.test.js test/project-setup.test.js test/readiness.test.js test/record-cli.test.js test/record.test.js test/remote-network.test.js test/secure-prompt.test.js test/secure-recovery.test.js test/signed-status.test.js test/topology.test.js",
     "devnet:init": "node src/cli.js devnet init --dir .nova/devnet",
     "devnet": "node scripts/run-devnet.js",
     "explorer": "npm --prefix explorer run dev",
@@ -22,6 +22,7 @@
     "nova": "node scripts/run-nova.js",
     "nova:secure": "node scripts/run-nova.js --secure",
     "nova:secure:prompt": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-secure-prompt.ps1",
+    "nova:cli:prompt": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run-secure-cli.ps1",
     "doctor": "node src/cli.js doctor --network .nova/private",
     "demo": "node scripts/demo.js"
   },

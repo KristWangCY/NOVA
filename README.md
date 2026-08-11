@@ -1,8 +1,8 @@
 # NOVA
 
-NOVA is an independent blockchain designed for personal, self-hosted use. The current `v0.18.0` release can run three validator nodes on a single Windows computer and generate separately encrypted validator deployment bundles for three independent devices. Accounts and validators use Ed25519 signatures, blocks are committed only after receiving signatures from at least two of the three validators, and every node independently replays transactions and verifies the resulting state root.
+NOVA is an independent blockchain designed for personal, self-hosted use. The current `v0.19.0` release can run three validator nodes on a single Windows computer and generate separately encrypted validator deployment bundles for three independent devices. Accounts and validators use Ed25519 signatures, blocks are committed only after receiving signatures from at least two of the three validators, and every node independently replays transactions and verifies the resulting state root.
 
-This release securely stores encrypted private keys, reports final transaction receipts, diagnoses the health of a three-node network, automatically selects a trustworthy backup source, and provides NOVA's first practical personal-use feature: immutable SHA-256 proofs for local files. Its seven-day readiness journal accepts a day only when a meaningful transfer or record is finally committed, the live network agrees on one head, and a verified same-day chain backup covers that transaction. v0.18 adds a one-command masked password launcher while preserving the first-use-aware readiness workflow and the isolated Explorer port used beside the K&M collaboration workspace.
+This release securely stores encrypted private keys, reports final transaction receipts, diagnoses the health of a three-node network, automatically selects a trustworthy backup source, and provides NOVA's first practical personal-use feature: immutable SHA-256 proofs for local files. Its seven-day readiness journal accepts a day only when a meaningful transfer or record is finally committed, the live network agrees on one head, and a verified same-day chain backup covers that transaction. v0.19 extends the masked password workflow to individual CLI commands, corrects the human-readable backup-head hash, and makes dependency setup reproducible without changing the Explorer manifests.
 
 NOVA is still a protocol prototype for learning and validating requirements. **Do not use it to hold real value or expose it directly to the public internet.**
 
@@ -13,6 +13,8 @@ NOVA requires Node.js 22 or later. Install the local Explorer dependencies befor
 ```powershell
 npm.cmd run setup
 ```
+
+Setup uses the committed Explorer lockfile and does not add or update dependencies in the manifests.
 
 Choose a unique, strong password of at least 12 characters and store it in a password manager. Start NOVA with the masked password prompt:
 
@@ -26,7 +28,7 @@ The launcher checks the Explorer port before creating any child process. To use 
 
 The prompt is masked and the launcher does not put the password in the parent PowerShell environment, command history, or a file. It exposes the password only to the launcher and its Node child while NOVA is running, removes the child environment entry on exit, and frees the temporary BSTR buffer. This does not guarantee physical erasure of every managed-runtime or Node.js memory copy. A same-user or more privileged malicious process is outside this local launcher boundary. If the password is shorter than 12 characters, the launcher stops before starting NOVA; run the same command again and enter a longer password. If interrupted with `Ctrl+C`, wait for the processes to exit before closing the terminal.
 
-If the password is lost, the validator and faucet private keys cannot be recovered. For convenience, the single-machine mode encrypts all four private keys with the same startup password. The v0.18 multi-device workflow requires four different passwords: one for the faucet and one for each validator. Validator key rotation is not implemented yet. `npm.cmd run nova:secure` remains available for automation that deliberately sets `NOVA_KEY_PASSWORD`; that automation is responsible for removing its own environment variable afterwards.
+If the password is lost, the validator and faucet private keys cannot be recovered. For convenience, the single-machine mode encrypts all four private keys with the same startup password. The v0.19 multi-device workflow requires four different passwords: one for the faucet and one for each validator. Validator key rotation is not implemented yet. `npm.cmd run nova:secure` remains available for automation that deliberately sets `NOVA_KEY_PASSWORD`; that automation is responsible for removing its own environment variable afterwards.
 
 ## Prepare a three-device network
 
@@ -67,26 +69,27 @@ A remote backup tolerates one unreachable validator, but it must obtain signed s
 
 ## Verify the network
 
-Open another PowerShell window, set the same password used to start the single-machine network, and query its status:
+Open another PowerShell window and query the public node status. Use the masked CLI wrapper for a diagnosis that also unlocks and checks the encrypted validator keys:
 
 ```powershell
-$env:NOVA_KEY_PASSWORD = "the-same-password-used-at-startup"
 node src/cli.js status
-npm.cmd run doctor
+npm.cmd run nova:cli:prompt -- doctor --network .nova/private
 ```
+
+`nova:cli:prompt` forwards each argument directly to `src/cli.js` without evaluating a shell command string. It uses the same isolated password lifecycle as the network launcher, so the parent PowerShell environment remains unchanged.
 
 `doctor` verifies the genesis configuration, validator identities, signed blockchains, shared history, password-based key access, and live chain heads across all three nodes. If the network is stopped, it reports a warning but still completes offline validation. It reports an actionable failure when only some nodes are online or when nodes at the same height have different blocks.
 
 Create an encrypted receiving account:
 
 ```powershell
-node src/cli.js account create --out .nova/alice-keystore.json --label alice
+npm.cmd run nova:cli:prompt -- account create --out .nova/alice-keystore.json --label alice
 ```
 
 Replace `<ALICE_ADDRESS>` with the address printed by the command, then transfer funds from the encrypted faucet:
 
 ```powershell
-node src/cli.js tx transfer `
+npm.cmd run nova:cli:prompt -- tx transfer `
   --key .nova/private/faucet-key.json `
   --to <ALICE_ADDRESS> `
   --amount 2500000 `
@@ -106,7 +109,7 @@ node src/cli.js account balance --address <ALICE_ADDRESS>
 The file contents and local path are never uploaded or written to the chain. Only the SHA-256 digest, byte length, and explicitly public metadata enter the signed transaction. This example uses the private-network faucet as the recording account:
 
 ```powershell
-node src/cli.js record create `
+npm.cmd run nova:cli:prompt -- record create `
   --key .nova/private/faucet-key.json `
   --file C:\path\to\your-file.pdf `
   --title "My first proof" `
@@ -162,7 +165,7 @@ The default journal is `.nova/readiness/journal.json` and must stay private and 
 
 ## Development network and tests
 
-`npm.cmd run nova` starts a development network and Explorer with plaintext test keys. Use it only for automated testing and demonstrations. `npm.cmd run demo` executes a three-node transfer in a temporary directory and cleans it up automatically. Use `npm.cmd run nova:secure:prompt` for routine personal operation.
+`npm.cmd run nova` starts a development network and Explorer with plaintext test keys. Use it only for automated testing and demonstrations. `npm.cmd run demo` executes a three-node transfer in a temporary directory and cleans it up automatically. Use `npm.cmd run nova:secure:prompt` for routine personal operation and `npm.cmd run nova:cli:prompt -- <CLI_ARGS>` for commands that unlock an encrypted key.
 
 ```powershell
 npm.cmd test
@@ -218,11 +221,11 @@ flowchart LR
 - JSON file storage does not provide database transactions, incremental snapshots, pruning, or mature disaster recovery.
 - Record queries currently scan the complete chain. This is suitable for personal-scale use, not large file indexes.
 - NOVA has no dynamic validators, governance, smart contracts, cross-chain support, private transactions, or validator key rotation.
-- The local Explorer must not be published directly to the internet. Remote access requires a secure, read-only gateway first. v0.18 provides signed remote diagnostics, quorum backups, crash-state cleanup, recovery for common lock states, graceful shutdown, first-use-aware read-only preflight, a masked one-command local launcher, conflict-checked Explorer startup, and one-command readiness evidence capture, but the owner has not yet completed either a real seven-day trial or acceptance testing on three physical devices.
+- The local Explorer must not be published directly to the internet. Remote access requires a secure, read-only gateway first. v0.19 provides signed remote diagnostics, quorum backups, crash-state cleanup, recovery for common lock states, graceful shutdown, first-use-aware read-only preflight, masked network and CLI launchers, conflict-checked Explorer startup, and one-command readiness evidence capture. The owner has completed one verified local readiness day, but not the required seven-day trial or acceptance testing on three physical devices.
 - `node.lock` prevents two processes from writing to the same node home and recovers locks left by dead process IDs. It is not a distributed lock.
 - The readiness journal's SHA-256 chain detects accidental or partial edits; it is not a signature, trusted timestamp, or proof against an owner who controls the computer and recomputes the journal.
 
-Architecture decisions are recorded in [ADR 0001](docs/adr/0001-node-prototype.md) through [ADR 0018](docs/adr/0018-masked-password-launcher.md). See the [product brief](docs/PRODUCT.md), [roadmap](docs/ROADMAP.md), and [protocol summary](docs/PROTOCOL.md) for scope, delivery stages, and protocol formats.
+Architecture decisions are recorded in [ADR 0001](docs/adr/0001-node-prototype.md) through [ADR 0019](docs/adr/0019-real-day-one-operations.md). See the [product brief](docs/PRODUCT.md), [roadmap](docs/ROADMAP.md), and [protocol summary](docs/PROTOCOL.md) for scope, delivery stages, and protocol formats.
 
 ## Project principles
 
