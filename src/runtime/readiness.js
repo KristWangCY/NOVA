@@ -584,7 +584,7 @@ function preflightRecommendation(state, {
     return mode === "local"
       ? {
         message: "No private network exists yet. Create and keep a strong password locally, then run the secure launcher; preflight did not create any files.",
-        command: "npm.cmd run nova:secure",
+        command: "npm.cmd run nova:secure:prompt",
       }
       : {
         message: "No distributed deployment exists yet. Create a public topology template, then follow the private three-device deployment guide.",
@@ -625,7 +625,7 @@ function preflightRecommendation(state, {
     if (nextAction === "start-network" && mode === "local") {
       return {
         message: "The private network is initialized but stopped. Start the secure network before creating a transaction or readiness evidence.",
-        command: "npm.cmd run nova:secure",
+        command: "npm.cmd run nova:secure:prompt",
       };
     }
     return {
