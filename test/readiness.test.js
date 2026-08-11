@@ -264,7 +264,7 @@ test("readiness captures finality, retries a head advance, and refuses a degrade
   assert.equal(uninitialized.nextAction, "initialize-network");
   assert.equal(uninitialized.network.initialized, false);
   assert.equal(uninitialized.network.sourceStatus, "missing");
-  assert.equal(uninitialized.recommendation.command, "npm.cmd run nova:secure");
+  assert.equal(uninitialized.recommendation.command, "npm.cmd run nova:secure:prompt");
   assert.equal(existsSync(networkDirectory), false);
   assert.equal(existsSync(uninitializedJournal), false);
 
@@ -546,5 +546,5 @@ test("readiness captures finality, retries a head advance, and refuses a degrade
   assert.equal(stopped.network.initialized, true);
   assert.equal(stopped.network.onlineValidators, 0);
   assert.equal(stopped.nextAction, "start-network");
-  assert.equal(stopped.recommendation.command, "npm.cmd run nova:secure");
+  assert.equal(stopped.recommendation.command, "npm.cmd run nova:secure:prompt");
 });

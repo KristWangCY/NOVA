@@ -22,7 +22,7 @@ preflight 输出升级为 `nova-readiness-preflight` version 2，并在 `network
 - local 网络有效但所有验证者停止：`BLOCKED`、exit 2、`start-network`。
 - 其他网络健康问题继续 `BLOCKED / repair-network`。
 
-local 首次使用只建议 `npm.cmd run nova:secure`；distributed 首次使用只建议创建 public topology template 并遵循三设备部署手册。建议命令在所有者主动执行后可能写入，但 preflight 本身不创建目录、文件、锁、交易、备份或修复，也不读取或输出密码。
+local 首次使用只建议 `npm.cmd run nova:secure:prompt`；distributed 首次使用只建议创建 public topology template 并遵循三设备部署手册。建议命令在所有者主动执行后可能写入，但 preflight 本身不创建目录、文件、锁、交易、备份或修复，也不读取或输出密码。
 
 ## 结果
 

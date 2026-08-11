@@ -1,8 +1,8 @@
-# NOVA v0.17 安全运维手册
+# NOVA v0.18 安全运维手册
 
-这份手册以当前“所有节点运行在同一台 Windows 电脑”的日常自用阶段为主，也记录 v0.17 私网多设备的远程诊断、备份和七日 readiness 入口。它不适用于公网部署。
+这份手册以当前“所有节点运行在同一台 Windows 电脑”的日常自用阶段为主，也记录 v0.18 私网多设备的远程诊断、备份和七日 readiness 入口。它不适用于公网部署。
 
-v0.17 已能生成多设备拓扑和单验证者 bundle，从受信任管理电脑验证远端签名状态、取得 quorum 链备份，在断电重启时清理非最终残留状态，恢复常见的持久化提议锁，在退出前排空后台写任务，以只读 preflight 区分首次初始化、停机、故障和恢复路径，并让 NOVA Explorer 与 K&M 平台在不同本地端口同时运行；但在真实七日试用和三台实际设备验收完成前，日常流程仍以单机网络为准。多设备准备请严格按 [三设备部署手册](DEPLOYMENT.md) 操作。
+v0.18 已能生成多设备拓扑和单验证者 bundle，从受信任管理电脑验证远端签名状态、取得 quorum 链备份，在断电重启时清理非最终残留状态，恢复常见的持久化提议锁，在退出前排空后台写任务，以只读 preflight 区分首次初始化、停机、故障和恢复路径，并用一个遮罩密码命令让 NOVA Explorer 与 K&M 平台在不同本地端口同时运行；但在真实七日试用和三台实际设备验收完成前，日常流程仍以单机网络为准。多设备准备请严格按 [三设备部署手册](DEPLOYMENT.md) 操作。
 
 ## 1. 首次创建
 
@@ -10,17 +10,10 @@ v0.17 已能生成多设备拓扑和单验证者 bundle，从受信任管理电�
 
 ```powershell
 npm.cmd run setup
-$novaSecret = Read-Host "创建或输入 NOVA 密码" -AsSecureString
-$novaPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($novaSecret)
-try {
-  $env:NOVA_KEY_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($novaPointer)
-} finally {
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($novaPointer)
-}
-npm.cmd run nova:secure
+npm.cmd run nova:secure:prompt
 ```
 
-密码输入会被遮罩，明文不会进入 PowerShell 命令历史。初始化先在临时目录完成所有密钥加密和配置写入，成功后才整体移动到 `.nova/private`。密码缺失、过短或写入失败不会留下可被误判为完整网络的目标目录。
+密码输入会被遮罩。启动器不会把密码写入父 PowerShell 环境、命令历史或磁盘；它只在运行期间把密码交给启动器和 Node 子进程，退出时删除子进程环境变量并释放临时 BSTR 缓冲区。这不等于能够保证 CLR 或 Node.js 管理内存中每一份副本都被物理清零；同一用户或更高权限的恶意进程也不在该启动器的保护边界内。初始化先在临时目录完成所有密钥加密和配置写入，成功后才整体移动到 `.nova/private`。密码缺失、少于 12 个字符或写入失败不会留下可被误判为完整网络的目标目录。
 
 创建后立即把密码保存进密码管理器，并对下列内容做离线加密备份：
 
@@ -33,13 +26,13 @@ npm.cmd run nova:secure
 
 ## 2. 日常启动与停止
 
-每个新的 PowerShell 会话都需要用第 1 节相同的遮罩步骤重新设置密码环境变量，然后启动：
+每次启动都运行同一个遮罩命令：
 
 ```powershell
-npm.cmd run nova:secure
+npm.cmd run nova:secure:prompt
 ```
 
-停止所有服务后运行 `Remove-Item Env:NOVA_KEY_PASSWORD`，从当前 PowerShell 会话清除密码环境变量。
+默认命令不会修改父 PowerShell 的 `NOVA_KEY_PASSWORD`，因此停止后无需手工清除。若自动化流程直接使用 `npm.cmd run nova:secure` 并自行设置该环境变量，则自动化流程必须在完成后清除它。
 
 看到三个节点都输出 `listening` 后再开始转账。NOVA Explorer 只应通过 `http://127.0.0.1:3100` 打开；K&M 继续使用 3000。启动器会先检查 3100 是否空闲，如需覆盖可在当前会话设置 `NOVA_EXPLORER_PORT`，但只能选择 1024–65535 且不能使用节点端口 4101–4103。正常停止使用一次 `Ctrl+C`，等待进程自行退出后再关机；不要看到端口关闭就立即强杀进程。节点会先停止接收新请求，再等待在途 gossip、同步、出块和投票锁恢复任务结束，最后才释放 `node.lock`。网络超时默认有界，正常排空可能需要数秒。
 
@@ -156,7 +149,8 @@ node src/cli.js backup restore `
 
 | 错误 | 含义与处理 |
 | --- | --- |
-| `set $env:NOVA_KEY_PASSWORD` | 当前 PowerShell 没有密码；设置后重试。 |
+| `Password must contain at least 12 characters` | 密码过短；重新运行 `npm.cmd run nova:secure:prompt` 并输入至少 12 个字符。 |
+| `set $env:NOVA_KEY_PASSWORD` | 你运行了供自动化使用的底层入口；日常使用请改为 `npm.cmd run nova:secure:prompt`。 |
 | `unable to decrypt keystore` | 密码错误或文件损坏；停止重试，核对密码与离线备份。 |
 | `node home is already in use` | 节点正在运行；不要删除锁，找到并停止原进程。 |
 | `ATTENTION REQUIRED` | 查看所有 `[FAIL]` 行；修复前不要转账或备份。 |
