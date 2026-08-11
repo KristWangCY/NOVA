@@ -1,8 +1,8 @@
-# NOVA v0.12 安全运维手册
+# NOVA v0.13 安全运维手册
 
-这份手册以当前“所有节点运行在同一台 Windows 电脑”的日常自用阶段为主，也记录 v0.12 私网多设备的远程诊断和备份入口。它不适用于公网部署。
+这份手册以当前“所有节点运行在同一台 Windows 电脑”的日常自用阶段为主，也记录 v0.13 私网多设备的远程诊断、备份和七日 readiness 入口。它不适用于公网部署。
 
-v0.12 已能生成多设备拓扑和单验证者 bundle，从受信任管理电脑验证远端签名状态、取得 quorum 链备份，在断电重启时清理非最终残留状态，恢复常见的持久化提议锁，并在退出前排空后台写任务；但在三台实际设备、私网覆盖和防火墙完成验收前，日常流程仍以单机网络为准。多设备准备请严格按 [三设备部署手册](DEPLOYMENT.md) 操作。
+v0.13 已能生成多设备拓扑和单验证者 bundle，从受信任管理电脑验证远端签名状态、取得 quorum 链备份，在断电重启时清理非最终残留状态，恢复常见的持久化提议锁，在退出前排空后台写任务，并保存每天真实自用的可核验摘要；但在真实七日试用和三台实际设备验收完成前，日常流程仍以单机网络为准。多设备准备请严格按 [三设备部署手册](DEPLOYMENT.md) 操作。
 
 ## 1. 首次创建
 
@@ -166,7 +166,39 @@ node src/cli.js backup restore `
 | `recovered volatile state` | 节点在断电恢复时清除了非最终 mempool 残留或已提交投票锁；随后运行 doctor 并确认 pending/committed 回执。 |
 | `locked proposal ... did not reach quorum` | 本节点保留安全投票锁但暂时没有兼容同伴票；先恢复至少另一节点和网络连接。全部在线后仍持续出现时保存日志并停止业务，不要删除 `votes.json`。 |
 
-## 8. 当前不能做的事
+## 8. 七日自用 readiness
+
+每天先完成一笔真正有用途的 transfer 或 record，并用 `tx status` 确认 `final: true`。随后在同一伦敦日期内创建并验证链备份，再登记当天证据：
+
+```powershell
+node src/cli.js backup create `
+  --network .nova/private `
+  --out .nova/backups/nova-YYYY-MM-DD.json
+
+node src/cli.js readiness check `
+  --network .nova/private `
+  --backup .nova/backups/nova-YYYY-MM-DD.json `
+  --tx <FINAL_TRANSACTION_ID>
+
+node src/cli.js readiness report --require-ready
+```
+
+未满七日时会看到类似结果（hash 与日期以本机实际输出为准）：
+
+```text
+NOVA readiness: IN PROGRESS
+Chain: nova-local-1
+Evidence: 3 day(s), current streak 3/7
+Period: 2026-08-11 to 2026-08-13 (Europe/London)
+Remaining consecutive days: 4
+Journal hash: <64-character SHA-256>
+```
+
+最后一条命令在连续七日完成前返回状态 2，这是“尚未就绪”而不是 journal 损坏。不要修改系统日期、复用交易或手工编辑 `.nova/readiness/journal.json` 来补日；命令没有日期参数，并会拒绝重复日期、重复交易、跨链证据和被改动的历史。每天另行保存有意义用途的简短说明，因为 journal 只保存协议摘要，不保存你为什么使用它。
+
+readiness journal 必须保持私有且不要提交 Git。备份链头必须与随后 doctor 观察到的健康链头完全一致；如果期间恰好产生新块，命令会安全拒绝，此时重新创建备份并立即重试即可。其 SHA-256 链用于发现意外修改，不是第三方签名或可信时间证明。七日通过后仍然不能承载真实资金或开放公网；它只关闭“这条链能否支持你的每日流程”这一项产品风险。
+
+## 9. 当前不能做的事
 
 - 不能找回遗失密码，也不能在线轮换验证者密钥。
 - 不能把 API 改为 `0.0.0.0` 后直接开放公网。
@@ -175,3 +207,4 @@ node src/cli.js backup restore `
 - 不能把这套 2-of-3 原型当作可承载资金的生产 BFT 网络。
 - 不能仅靠链备份恢复资产所有权；私钥与密码必须独立备份。
 - 不能撤销或删除已经提交的公开 record 元数据；只能追加更正记录。
+- 不能把本地 readiness journal 当作第三方审计证明，也不能把自动测试当成真实七日使用。
