@@ -73,6 +73,10 @@ function formatNova(unova, decimals = 6) {
   return `${whole}${fraction ? `.${fraction}` : ""} NOVA`;
 }
 
+export function formatReadinessBackupHead(backup) {
+  return `Backup head: height ${backup.height} ${backup.blockHash}`;
+}
+
 function passwordFromEnvironment(options, { required: isRequired = false } = {}) {
   const variable = options.passwordEnv || "NOVA_KEY_PASSWORD";
   const password = process.env[variable];
@@ -400,7 +404,7 @@ export async function runCli(argv = process.argv.slice(2)) {
       console.log(`Transaction: ${result.entry.transaction.type} ${result.entry.transaction.id} at height ${result.entry.transaction.height}`);
       console.log(`Doctor: ${result.entry.doctor.onlineValidators}/${result.entry.doctor.expectedValidators} validators online at height ${result.entry.doctor.height}`);
       console.log(`Backup: ${result.backupMode} ${result.backupFile}`);
-      console.log(`Backup head: height ${result.entry.backup.height} ${result.entry.backup.snapshotHash}`);
+      console.log(formatReadinessBackupHead(result.entry.backup));
       if (result.backupAttempts > 1) {
         console.log(`Automatic backup attempts: ${result.backupAttempts}/${READINESS_AUTOMATIC_BACKUP_ATTEMPTS}`);
       }

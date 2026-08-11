@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { hashObject } from "../src/core/canonical.js";
 import { generateKeyRecord } from "../src/core/crypto.js";
 import { createTransfer } from "../src/core/transaction.js";
+import { formatReadinessBackupHead } from "../src/cli.js";
 import { NovaNode } from "../src/node.js";
 import { initializeDevnet } from "../src/runtime/bootstrap.js";
 import { atomicWriteJson, readJson } from "../src/runtime/files.js";
@@ -72,6 +73,13 @@ function syntheticEvidence(date, index, overrides = {}) {
     backup: { ...evidence.backup, ...(overrides.backup ?? {}) },
   };
 }
+
+test("readiness CLI labels the backup block hash rather than its snapshot hash", () => {
+  const backup = syntheticEvidence("2026-08-11", 1).backup;
+  const output = formatReadinessBackupHead(backup);
+  assert.equal(output, `Backup head: height ${backup.height} ${backup.blockHash}`);
+  assert.doesNotMatch(output, new RegExp(backup.snapshotHash));
+});
 
 test("Europe/London dates remain explicit across UTC and BST boundaries", () => {
   assert.equal(londonDate(Date.parse("2026-01-01T00:30:00Z")), "2026-01-01");
