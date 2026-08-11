@@ -1,12 +1,12 @@
 {
   "name": "nova-explorer",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vinext dev",
+    "dev": "vinext dev --hostname 127.0.0.1 --port 3100",
     "build": "vinext build",
     "start": "vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",

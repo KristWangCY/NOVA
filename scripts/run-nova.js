@@ -1,6 +1,11 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  assertExplorerPortAvailable,
+  EXPLORER_HOST,
+  resolveExplorerPort,
+} from "./lib/explorer-launch.js";
 
 const explorerCli = resolve("explorer/node_modules/vinext/dist/cli.js");
 if (!existsSync(explorerCli)) {
@@ -8,6 +13,8 @@ if (!existsSync(explorerCli)) {
 }
 
 const secure = process.argv.includes("--secure");
+const explorerPort = resolveExplorerPort();
+await assertExplorerPortAvailable(explorerPort);
 const services = [
   {
     name: secure ? "private-network" : "devnet",
@@ -18,13 +25,13 @@ const services = [
   {
     name: "explorer",
     command: process.execPath,
-    args: [explorerCli, "dev"],
+    args: [explorerCli, "dev", "--hostname", EXPLORER_HOST, "--port", String(explorerPort)],
     cwd: resolve("explorer"),
   },
 ];
 
 console.log(`Starting NOVA ${secure ? "secure private network" : "devnet"} and local explorer...`);
-console.log("Explorer: http://localhost:3000");
+console.log(`Explorer: http://${EXPLORER_HOST}:${explorerPort}`);
 console.log("Press Ctrl+C to stop every NOVA service.");
 
 const children = services.map((service) => ({

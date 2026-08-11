@@ -11,7 +11,7 @@ npm.cmd run setup
 npm.cmd run nova
 ```
 
-然后打开 `http://localhost:3000`。如需单独启动界面：
+然后打开 `http://127.0.0.1:3100`。3100 是 NOVA Explorer 的默认本地端口，避免与运行在 3000 的 K&M 协作平台冲突。如需单独启动界面：
 
 ```powershell
 npm.cmd --prefix explorer run dev

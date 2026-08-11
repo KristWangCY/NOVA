@@ -1,8 +1,8 @@
 # NOVA
 
-NOVA is an independent blockchain designed for personal, self-hosted use. The current `v0.16.0` release can run three validator nodes on a single Windows computer and generate separately encrypted validator deployment bundles for three independent devices. Accounts and validators use Ed25519 signatures, blocks are committed only after receiving signatures from at least two of the three validators, and every node independently replays transactions and verifies the resulting state root.
+NOVA is an independent blockchain designed for personal, self-hosted use. The current `v0.17.0` release can run three validator nodes on a single Windows computer and generate separately encrypted validator deployment bundles for three independent devices. Accounts and validators use Ed25519 signatures, blocks are committed only after receiving signatures from at least two of the three validators, and every node independently replays transactions and verifies the resulting state root.
 
-This release securely stores encrypted private keys, reports final transaction receipts, diagnoses the health of a three-node network, automatically selects a trustworthy backup source, and provides NOVA's first practical personal-use feature: immutable SHA-256 proofs for local files. Its seven-day readiness journal accepts a day only when a meaningful transfer or record is finally committed, the live network agrees on one head, and a verified same-day chain backup covers that transaction. v0.16 extends the read-only preflight to distinguish a first-time setup, a stopped network, a partial source, and a missing network that must be restored; the existing readiness command can create the private backup and retry only when a new block advances the head between backup and diagnosis.
+This release securely stores encrypted private keys, reports final transaction receipts, diagnoses the health of a three-node network, automatically selects a trustworthy backup source, and provides NOVA's first practical personal-use feature: immutable SHA-256 proofs for local files. Its seven-day readiness journal accepts a day only when a meaningful transfer or record is finally committed, the live network agrees on one head, and a verified same-day chain backup covers that transaction. v0.17 keeps the first-use-aware readiness workflow and moves the local Explorer to an isolated, preflighted port so NOVA can run beside the K&M collaboration workspace without a port collision.
 
 NOVA is still a protocol prototype for learning and validating requirements. **Do not use it to hold real value or expose it directly to the public internet.**
 
@@ -27,9 +27,11 @@ try {
 npm.cmd run nova:secure
 ```
 
-On its first run, this command atomically creates three nodes, the genesis configuration, and an encrypted faucet under `.nova/private`. Later runs continue the existing chain. The Explorer is available at [http://localhost:3000](http://localhost:3000), and the node APIs listen on `http://127.0.0.1:4101` through `4103`. Press `Ctrl+C` to stop all services.
+On its first run, this command atomically creates three nodes, the genesis configuration, and an encrypted faucet under `.nova/private`. Later runs continue the existing chain. The Explorer is available at [http://127.0.0.1:3100](http://127.0.0.1:3100), leaving port 3000 available for K&M, and the node APIs listen on `http://127.0.0.1:4101` through `4103`. Press `Ctrl+C` to stop all services.
 
-The password is never written to disk. After stopping NOVA, run `Remove-Item Env:NOVA_KEY_PASSWORD` to clear it from that PowerShell session. If the password is lost, the validator and faucet private keys cannot be recovered. For convenience, the single-machine mode encrypts all four private keys with the same startup password. The v0.16 multi-device workflow requires four different passwords: one for the faucet and one for each validator. Validator key rotation is not implemented yet.
+The launcher checks the Explorer port before creating any child process. To use another local port, set `NOVA_EXPLORER_PORT` in the current session before starting NOVA; the value must be 1024–65535 and cannot be 4101–4103. The Explorer remains bound to `127.0.0.1`.
+
+The password is never written to disk. After stopping NOVA, run `Remove-Item Env:NOVA_KEY_PASSWORD` to clear it from that PowerShell session. If the password is lost, the validator and faucet private keys cannot be recovered. For convenience, the single-machine mode encrypts all four private keys with the same startup password. The v0.17 multi-device workflow requires four different passwords: one for the faucet and one for each validator. Validator key rotation is not implemented yet.
 
 ## Prepare a three-device network
 
@@ -125,7 +127,7 @@ node src/cli.js record verify --file C:\path\to\your-file.pdf
 node src/cli.js record list --category document
 ```
 
-You can also select **Verify local file** at [http://localhost:3000](http://localhost:3000). The Explorer calculates the digest locally in the browser. Use the CLI's streaming verification for files larger than 64 MiB.
+You can also select **Verify local file** at [http://127.0.0.1:3100](http://127.0.0.1:3100). The Explorer calculates the digest locally in the browser. Use the CLI's streaming verification for files larger than 64 MiB.
 
 A record proves that the signing account committed a digest of those exact bytes no later than the block's recorded time. It does not automatically prove that the content is true, lawful, or original. Titles, categories, notes, file sizes, and raw digests remain visible to every chain participant permanently. Never put secrets in public metadata; hashes of low-entropy sensitive content may also be guessed.
 
@@ -221,11 +223,11 @@ flowchart LR
 - JSON file storage does not provide database transactions, incremental snapshots, pruning, or mature disaster recovery.
 - Record queries currently scan the complete chain. This is suitable for personal-scale use, not large file indexes.
 - NOVA has no dynamic validators, governance, smart contracts, cross-chain support, private transactions, or validator key rotation.
-- The local Explorer must not be published directly to the internet. Remote access requires a secure, read-only gateway first. v0.16 provides signed remote diagnostics, quorum backups, crash-state cleanup, recovery for common lock states, graceful shutdown, first-use-aware read-only preflight, and one-command readiness evidence capture, but the owner has not yet completed either a real seven-day trial or acceptance testing on three physical devices.
+- The local Explorer must not be published directly to the internet. Remote access requires a secure, read-only gateway first. v0.17 provides signed remote diagnostics, quorum backups, crash-state cleanup, recovery for common lock states, graceful shutdown, first-use-aware read-only preflight, conflict-checked local Explorer startup, and one-command readiness evidence capture, but the owner has not yet completed either a real seven-day trial or acceptance testing on three physical devices.
 - `node.lock` prevents two processes from writing to the same node home and recovers locks left by dead process IDs. It is not a distributed lock.
 - The readiness journal's SHA-256 chain detects accidental or partial edits; it is not a signature, trusted timestamp, or proof against an owner who controls the computer and recomputes the journal.
 
-Architecture decisions are recorded in [ADR 0001](docs/adr/0001-node-prototype.md) through [ADR 0016](docs/adr/0016-first-use-preflight.md). See the [product brief](docs/PRODUCT.md), [roadmap](docs/ROADMAP.md), and [protocol summary](docs/PROTOCOL.md) for scope, delivery stages, and protocol formats.
+Architecture decisions are recorded in [ADR 0001](docs/adr/0001-node-prototype.md) through [ADR 0017](docs/adr/0017-km-explorer-port-isolation.md). See the [product brief](docs/PRODUCT.md), [roadmap](docs/ROADMAP.md), and [protocol summary](docs/PROTOCOL.md) for scope, delivery stages, and protocol formats.
 
 ## Project principles
 

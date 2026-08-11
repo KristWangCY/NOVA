@@ -200,3 +200,13 @@
 - [x] preflight JSON 升级到 version 2，显式返回 `network.initialized`、`sourcePath` 和 `sourceStatus`。
 - [x] 自动测试覆盖 missing、empty、partial、journal-without-network、damaged-without-network、distributed missing、healthy、degraded 和 stopped 路径，并验证未产生隐式文件。
 - [ ] 所有者仍需亲自创建并保管密码、初始化 `.nova/private`，然后产生第一笔有意义的真实 Day 1 证据。
+
+## v0.17 K&M 与 NOVA 本地共存
+
+- [x] NOVA Explorer 默认从 3000 移到 `127.0.0.1:3100`，K&M 协作平台可以继续占用 3000。
+- [x] combined launcher 与 Explorer standalone script 使用同一默认 host/port，不再出现文档和启动行为分叉。
+- [x] `NOVA_EXPLORER_PORT` 支持本地覆盖，严格限制 1024–65535，并拒绝默认验证者 API 端口 4101–4103。
+- [x] 在启动任何子进程前探测所选 host/port；端口占用时返回包含地址和覆盖变量的明确错误。
+- [x] Explorer 继续只绑定 `127.0.0.1`；端口可配置不等于允许公网访问。
+- [x] 单元测试覆盖默认值、合法覆盖、格式/范围/节点端口拒绝和真实端口占用。
+- [ ] 所有者仍需按本机引导完成首次初始化，并确认 K&M 3000 与 NOVA Explorer 3100 同时可访问。
