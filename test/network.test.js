@@ -126,9 +126,9 @@ test("three validators finalize and replicate a signed transfer", { timeout: 250
   assert.match(receipt.blockHash, /^[0-9a-f]{64}$/);
 
   const overviewResponse = await fetch(`${network.nodes[1].url}/overview`, {
-    headers: { origin: "http://localhost:3000" },
+    headers: { origin: "http://127.0.0.1:3100" },
   });
-  assert.equal(overviewResponse.headers.get("access-control-allow-origin"), "http://localhost:3000");
+  assert.equal(overviewResponse.headers.get("access-control-allow-origin"), "http://127.0.0.1:3100");
   const overview = await overviewResponse.json();
   assert.equal(overview.totalTransactions, 1);
   assert.equal(overview.totalSupply, "999999999993");

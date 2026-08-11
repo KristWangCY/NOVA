@@ -4,8 +4,9 @@ import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
   const incoming = await headers();
-  const host = incoming.get("x-forwarded-host") || incoming.get("host") || "localhost:3000";
-  const protocol = incoming.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
+  const host = incoming.get("x-forwarded-host") || incoming.get("host") || "127.0.0.1:3100";
+  const localHost = host.startsWith("localhost") || host.startsWith("127.0.0.1");
+  const protocol = incoming.get("x-forwarded-proto") || (localHost ? "http" : "https");
   const image = `${protocol}://${host}/og.png`;
   const title = "NOVA Explorer — 本地区块浏览器";
   const description = "观察 NOVA 私有链的区块、交易、文件存证、账户与验证节点状态。";
