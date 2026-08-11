@@ -4,6 +4,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -12,11 +13,12 @@ import { dirname, resolve } from "node:path";
 import { hashObject } from "../core/canonical.js";
 import { verifyBackup } from "./backup.js";
 import { atomicWriteJson, readJson } from "./files.js";
-import { diagnoseNetwork } from "./network-inspection.js";
-import { diagnoseRemoteDeployment } from "./remote-network.js";
+import { createNetworkBackup, diagnoseNetwork } from "./network-inspection.js";
+import { createRemoteNetworkBackup, diagnoseRemoteDeployment } from "./remote-network.js";
 
 export const READINESS_DAYS = 7;
 export const READINESS_TIME_ZONE = "Europe/London";
+export const READINESS_AUTOMATIC_BACKUP_ATTEMPTS = 3;
 
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const ADDRESS_PATTERN = /^nova1[0-9a-f]{40}$/;
@@ -395,6 +397,7 @@ function findTransactionEvidence(backup, transactionId) {
 export async function captureReadinessDay({
   journalFile,
   backupFile,
+  automaticBackupDirectory,
   transactionId,
   networkDirectory,
   deploymentDirectory,
@@ -407,48 +410,91 @@ export async function captureReadinessDay({
     throw new Error("readiness timeout must be between 100 and 10000 milliseconds");
   }
   const journalPath = resolve(journalFile);
+  const explicitBackupPath = backupFile ? resolve(backupFile) : null;
+  const automaticBackupPath = automaticBackupDirectory ? resolve(automaticBackupDirectory) : null;
+  if (Boolean(explicitBackupPath) === Boolean(automaticBackupPath)) {
+    throw new Error("choose exactly one of backupFile or automaticBackupDirectory");
+  }
   mkdirSync(dirname(journalPath), { recursive: true });
   const lock = new ReadinessJournalLock(journalPath);
   try {
     const existing = existsSync(journalPath) ? verifyReadinessJournal(readJson(journalPath)) : null;
-    const backup = readJson(resolve(backupFile));
-    const backupVerification = verifyBackup(backup);
     const mode = networkDirectory ? "local" : "distributed";
-    const report = mode === "local"
-      ? await diagnoseNetwork({
-        directory: resolve(networkDirectory),
-        requireOnline: true,
-        timeoutMs,
-      })
-      : await diagnoseRemoteDeployment({
-        directory: resolve(deploymentDirectory),
-        timeoutMs,
-      });
-    if (report.chainId !== backupVerification.chainId) {
-      throw new Error("readiness doctor and backup belong to different chains");
+    const automatic = Boolean(automaticBackupPath);
+    const maximumAttempts = automatic ? READINESS_AUTOMATIC_BACKUP_ATTEMPTS : 1;
+    for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+      const resolvedBackupPath = automatic
+        ? resolve(automaticBackupPath, `nova-${londonDate(Date.now())}.json`)
+        : explicitBackupPath;
+      if (resolvedBackupPath === journalPath) {
+        throw new Error("readiness backup and journal paths must differ");
+      }
+      if (automatic) {
+        if (mode === "local") {
+          createNetworkBackup(resolve(networkDirectory), resolvedBackupPath);
+        } else {
+          await createRemoteNetworkBackup({
+            directory: resolve(deploymentDirectory),
+            output: resolvedBackupPath,
+            timeoutMs,
+          });
+        }
+      }
+      const backup = readJson(resolvedBackupPath);
+      const backupVerification = verifyBackup(backup);
+      const report = mode === "local"
+        ? await diagnoseNetwork({
+          directory: resolve(networkDirectory),
+          requireOnline: true,
+          timeoutMs,
+        })
+        : await diagnoseRemoteDeployment({
+          directory: resolve(deploymentDirectory),
+          timeoutMs,
+        });
+      if (report.chainId !== backupVerification.chainId) {
+        throw new Error("readiness doctor and backup belong to different chains");
+      }
+      const doctor = summarizeDoctor(report, mode);
+      const headMatches = backupVerification.height === doctor.height
+        && backupVerification.blockHash === doctor.blockHash;
+      const healthyHeadAdvanced = doctor.height > backupVerification.height;
+      if (!headMatches && automatic && healthyHeadAdvanced && attempt < maximumAttempts) continue;
+      if (!headMatches && automatic && healthyHeadAdvanced) {
+        throw new Error(
+          `automatic readiness backup did not match the observed healthy chain head after ${maximumAttempts} attempts`,
+        );
+      }
+      if (!headMatches) {
+        throw new Error("readiness backup must match the observed healthy chain head");
+      }
+      const recordedAt = Date.now();
+      const evidence = {
+        recordedAt,
+        mode,
+        chainId: backupVerification.chainId,
+        transaction: findTransactionEvidence(backup, transactionId),
+        doctor,
+        backup: {
+          createdAt: backup.createdAt,
+          height: backupVerification.height,
+          blockHash: backupVerification.blockHash,
+          stateRoot: backupVerification.stateRoot,
+          snapshotHash: backup.snapshotHash,
+        },
+      };
+      const journal = appendReadinessEvidence(existing, evidence);
+      atomicWriteJson(journalPath, journal);
+      return {
+        journal: journalPath,
+        backupFile: resolvedBackupPath,
+        backupMode: automatic ? "automatic" : "explicit",
+        backupAttempts: attempt,
+        entry: journal.entries.at(-1),
+        report: summarizeReadiness(journal),
+      };
     }
-    const recordedAt = Date.now();
-    const evidence = {
-      recordedAt,
-      mode,
-      chainId: backupVerification.chainId,
-      transaction: findTransactionEvidence(backup, transactionId),
-      doctor: summarizeDoctor(report, mode),
-      backup: {
-        createdAt: backup.createdAt,
-        height: backupVerification.height,
-        blockHash: backupVerification.blockHash,
-        stateRoot: backupVerification.stateRoot,
-        snapshotHash: backup.snapshotHash,
-      },
-    };
-    const journal = appendReadinessEvidence(existing, evidence);
-    atomicWriteJson(journalPath, journal);
-    return {
-      journal: journalPath,
-      entry: journal.entries.at(-1),
-      report: summarizeReadiness(journal),
-    };
+    throw new Error("automatic readiness backup attempts were exhausted");
   } finally {
     lock.release();
   }
@@ -490,5 +536,266 @@ export function summarizeReadiness(journal) {
     lastDate: journal.entries.at(-1).date,
     qualifyingPeriod,
     journalHash: journal.journalHash,
+  };
+}
+
+function emptyTrial() {
+  return {
+    version: 1,
+    chainId: null,
+    timeZone: READINESS_TIME_ZONE,
+    ready: false,
+    requiredConsecutiveDays: READINESS_DAYS,
+    recordedDays: 0,
+    currentStreak: 0,
+    longestStreak: 0,
+    remainingDays: READINESS_DAYS,
+    firstDate: null,
+    lastDate: null,
+    qualifyingPeriod: null,
+    journalHash: null,
+    todayRecorded: false,
+  };
+}
+
+function inspectReadinessSource(sourcePath) {
+  if (!existsSync(sourcePath)) return { status: "missing", error: null };
+  try {
+    return {
+      status: readdirSync(sourcePath).length === 0 ? "empty" : "present",
+      error: null,
+    };
+  } catch (error) {
+    return {
+      status: "unreadable",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function preflightRecommendation(state, {
+  mode,
+  nextAction,
+  sourceFlag,
+  sourcePath,
+  journalPath,
+}) {
+  if (state === "NOT_INITIALIZED") {
+    return mode === "local"
+      ? {
+        message: "No private network exists yet. Create and keep a strong password locally, then run the secure launcher; preflight did not create any files.",
+        command: "npm.cmd run nova:secure",
+      }
+      : {
+        message: "No distributed deployment exists yet. Create a public topology template, then follow the private three-device deployment guide.",
+        command: "node src/cli.js network template --out .nova/nova-topology.json",
+      };
+  }
+  if (state === "NOT_STARTED" || state === "IN_PROGRESS") {
+    return {
+      message: "Commit one meaningful transfer or record, wait for a final receipt, then record today's evidence.",
+      command: `node src/cli.js readiness check ${sourceFlag} "${sourcePath}" --tx <FINAL_TRANSACTION_ID>`,
+    };
+  }
+  if (state === "RECORDED_TODAY") {
+    return {
+      message: "Today's evidence is already recorded. Keep the network recoverable and return tomorrow.",
+      command: null,
+    };
+  }
+  if (state === "READY") {
+    return {
+      message: "The seven-day trial is complete. Preserve the journal and review the remaining deployment boundaries.",
+      command: `node src/cli.js readiness report --journal "${journalPath}" --require-ready`,
+    };
+  }
+  if (state === "BLOCKED") {
+    if (nextAction === "restore-network") {
+      return {
+        message: "A readiness journal exists but its network source is missing. Restore the matching chain and private keys; do not initialize a replacement chain.",
+        command: null,
+      };
+    }
+    if (nextAction === "inspect-network-source") {
+      return {
+        message: "The network source is partial or unreadable. Preserve it for inspection and do not overwrite or initialize it in place.",
+        command: null,
+      };
+    }
+    if (nextAction === "start-network" && mode === "local") {
+      return {
+        message: "The private network is initialized but stopped. Start the secure network before creating a transaction or readiness evidence.",
+        command: "npm.cmd run nova:secure",
+      };
+    }
+    return {
+      message: "Repair network health before creating a transaction or readiness evidence.",
+      command: `node src/cli.js doctor ${sourceFlag} "${sourcePath}"`,
+    };
+  }
+  if (state === "WRONG_NETWORK") {
+    return {
+      message: "Select the network that owns this readiness journal. Do not merge or rewrite journal history.",
+      command: null,
+    };
+  }
+  return {
+    message: "Preserve the damaged journal and restore a known-good private copy. Do not edit or append to it.",
+    command: null,
+  };
+}
+
+export async function preflightReadiness({
+  journalFile,
+  networkDirectory,
+  deploymentDirectory,
+  timeoutMs = 1500,
+  now = Date.now(),
+}) {
+  if (Boolean(networkDirectory) === Boolean(deploymentDirectory)) {
+    throw new Error("choose exactly one of networkDirectory or deploymentDirectory");
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 10_000) {
+    throw new Error("readiness timeout must be between 100 and 10000 milliseconds");
+  }
+  assertTimestamp(now, "readiness preflight time");
+  const mode = networkDirectory ? "local" : "distributed";
+  const sourcePath = resolve(networkDirectory || deploymentDirectory);
+  const sourceFlag = mode === "local" ? "--network" : "--deployment";
+  const journalPath = resolve(journalFile);
+  const date = londonDate(now);
+  const source = inspectReadinessSource(sourcePath);
+  let journal = null;
+  let journalStatus = "missing";
+  let journalError = null;
+  let trial = emptyTrial();
+  if (existsSync(journalPath)) {
+    try {
+      journal = verifyReadinessJournal(readJson(journalPath));
+      const summary = summarizeReadiness(journal);
+      trial = {
+        ...summary,
+        todayRecorded: journal.entries.some((entry) => entry.date === date),
+      };
+      journalStatus = "valid";
+    } catch (error) {
+      journalStatus = "damaged";
+      journalError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  let report = null;
+  let networkIssue = source.error;
+  if (source.status === "missing" || source.status === "empty") {
+    networkIssue = "network source has not been initialized";
+  } else if (source.status === "present") {
+    try {
+      report = mode === "local"
+        ? await diagnoseNetwork({ directory: sourcePath, requireOnline: true, timeoutMs })
+        : await diagnoseRemoteDeployment({ directory: sourcePath, timeoutMs });
+    } catch (error) {
+      networkIssue = error instanceof Error ? error.message : String(error);
+    }
+  }
+  let doctor = null;
+  if (report) {
+    try {
+      doctor = summarizeDoctor(report, mode);
+    } catch (error) {
+      const failures = report.checks
+        ?.filter(({ status }) => status === "fail")
+        .map(({ message }) => message)
+        .join("; ");
+      networkIssue = failures || (error instanceof Error ? error.message : String(error));
+    }
+  }
+  const network = {
+    healthy: Boolean(doctor),
+    initialized: Boolean(report?.chainId && report.expectedValidators > 0),
+    sourcePath,
+    sourceStatus: source.status,
+    chainId: report?.chainId ?? null,
+    expectedValidators: report?.expectedValidators ?? 0,
+    onlineValidators: report?.onlineValidators ?? 0,
+    quorum: report?.quorum ?? 0,
+    height: doctor?.height ?? null,
+    blockHash: doctor?.blockHash ?? null,
+    issue: networkIssue,
+  };
+
+  let state;
+  let nextAction;
+  let exitCode;
+  if (journalStatus === "damaged") {
+    state = "DAMAGED";
+    nextAction = "restore-journal";
+    exitCode = 1;
+  } else if (source.status === "missing" || source.status === "empty") {
+    if (journal) {
+      state = "BLOCKED";
+      nextAction = "restore-network";
+      exitCode = 2;
+    } else {
+      state = "NOT_INITIALIZED";
+      nextAction = "initialize-network";
+      exitCode = 0;
+    }
+  } else if (source.status === "unreadable" || !network.initialized) {
+    state = "BLOCKED";
+    nextAction = "inspect-network-source";
+    exitCode = 2;
+  } else if (!network.healthy) {
+    state = "BLOCKED";
+    nextAction = mode === "local" && network.onlineValidators === 0
+      ? "start-network"
+      : "repair-network";
+    exitCode = 2;
+  } else if (journal && journal.chainId !== network.chainId) {
+    state = "WRONG_NETWORK";
+    nextAction = "select-matching-network";
+    exitCode = 1;
+  } else if (trial.ready) {
+    state = "READY";
+    nextAction = "review-trial";
+    exitCode = 0;
+  } else if (trial.todayRecorded) {
+    state = "RECORDED_TODAY";
+    nextAction = "return-tomorrow";
+    exitCode = 0;
+  } else if (!journal) {
+    state = "NOT_STARTED";
+    nextAction = "commit-meaningful-transaction";
+    exitCode = 0;
+  } else {
+    state = "IN_PROGRESS";
+    nextAction = "commit-meaningful-transaction";
+    exitCode = 0;
+  }
+
+  return {
+    version: 2,
+    type: "nova-readiness-preflight",
+    checkedAt: now,
+    date,
+    timeZone: READINESS_TIME_ZONE,
+    mode,
+    state,
+    nextAction,
+    exitCode,
+    network,
+    journal: {
+      path: journalPath,
+      status: journalStatus,
+      chainId: journal?.chainId ?? null,
+      error: journalError,
+    },
+    trial,
+    recommendation: preflightRecommendation(state, {
+      mode,
+      nextAction,
+      sourceFlag,
+      sourcePath,
+      journalPath,
+    }),
   };
 }

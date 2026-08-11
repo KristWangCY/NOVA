@@ -1,4 +1,4 @@
-# NOVA v0.13 协议摘要
+# NOVA v0.16 协议摘要
 
 本文记录当前实现的持久化和签名边界。代码是最终权威来源；任何不兼容修改必须先增加协议版本和测试向量。
 
@@ -206,3 +206,15 @@ record 查询当前从新到旧扫描签名区块，不维护额外状态索引�
 local 条目要求所有配置验证者在线且同意一个链头。distributed 条目要求有效签名状态达到 quorum、在线链头一致，并继续服从远程诊断的身份、challenge、时间窗与冲突检查。采集命令不接受自定义日期，只在当前证据全部验证后原子写入；`${journal}.lock` 使用排他创建与死亡 PID 回收，防止两个进程同时追加。
 
 条目哈希是移除 `entryHash` 后对 canonical JSON 做 SHA-256；`journalHash` 同理排除自身字段。它能发现意外编辑、部分写入和未同步修改，但不是 Ed25519 签名、可信时间戳、Merkle inclusion proof 或独立见证。控制本机并重算全部哈希的所有者可以伪造历史，因此 readiness 只能证明当前自用流程按本机证据持续运行，不能提升共识安全等级或支持真实资金与公网声明。
+
+v0.14 的自动备份模式不改变 journal 或 `nova-chain-backup` v1 格式。未提供 `--backup` 时，采集在 journal 单 writer 锁内复用现有 local/remote 备份实现，将文件写入 `.nova/readiness/backups/nova-YYYY-MM-DD.json`，随后重新运行 doctor。只有备份高度或哈希因健康链头继续前进而不相等时，才允许重新创建，最多三次；备份创建、读取、签名、完整重放、chain ID、交易、doctor 或网络健康的其他错误均立即失败。提供 `--backup FILE` 时进入显式模式，只读输入文件且不重试、不覆盖。
+
+## Readiness preflight v2
+
+`readiness preflight` 是只读操作层合同，不属于链上协议，也不改变 readiness journal v1。输入必须在 `--network` 与 `--deployment` 中二选一，可选现有 `--journal`、`--timeout` 和 `--json`。命令读取 source 状态、调用严格 doctor、读取并验证 journal；journal 不存在时使用内存中的空试验摘要，不创建文件、目录、锁、交易、备份或修复。
+
+JSON 结果使用精确标识 `type: "nova-readiness-preflight"`、`version: 2`，并返回 `checkedAt`、`date`、`timeZone`、`mode`、`state`、`nextAction`、`exitCode`、`network`、`journal`、`trial` 和 `recommendation`。`network` 新增 `initialized`、`sourcePath` 与 `sourceStatus`；source 状态只允许 `missing`、`empty`、`present` 或 `unreadable`。
+
+状态优先级为：损坏 journal 的 `DAMAGED`；source 缺失/为空时，有 journal 为 `BLOCKED / restore-network`，无 journal 为 `NOT_INITIALIZED`；source 不可读或非空但未形成有效网络为 `BLOCKED / inspect-network-source`；随后是不健康网络的 `BLOCKED`、有效但 chain ID 不同的 `WRONG_NETWORK`，最后依次判断 `READY`、`RECORDED_TODAY`、`NOT_STARTED` 和 `IN_PROGRESS`。这保证损坏、残缺或待恢复数据不会被首次初始化覆盖。
+
+`NOT_INITIALIZED`、`NOT_STARTED`、`IN_PROGRESS`、`RECORDED_TODAY` 和 `READY` 以状态 0 退出；`BLOCKED` 以状态 2 退出；`DAMAGED` 与 `WRONG_NETWORK` 以状态 1 退出。命令解析或无法形成 preflight 结果的运行错误保持 CLI 的状态 1。状态 0 表示检查本身成功，不等于 `READY`；每个结果只提供一个 `nextAction` 与一个不含密码值的建议命令。

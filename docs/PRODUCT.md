@@ -169,3 +169,34 @@
 - [x] 自动测试已覆盖 UTC/BST 日期边界、间断重置、重复证据、未知版本/字段、哈希篡改、网络/备份/交易不一致、并发锁和真实三节点最终性。
 - [ ] 所有者仍需用实际有意义的交易或文件存证连续运行七天；自动测试不能替代这项证据。
 - [ ] 所有者仍需在三台真实设备上完成私网部署、掉线、追赶和恢复演练。
+
+## v0.14 一命令完成每日备份与 readiness
+
+- [x] 省略 `--backup` 时，在 readiness journal 的单 writer 锁内复用现有网络备份模块，默认写入 `.nova/readiness/backups/nova-YYYY-MM-DD.json`。
+- [x] 自动备份后重新执行严格 doctor；备份高度和 block hash 必须完全等于健康链头。
+- [x] 仅当新区块恰好推进链头时自动重建，最多三次；I/O、签名、完整重放、chain ID、交易或网络健康错误立即失败。
+- [x] 显式 `--backup FILE` 保持只读、单次和无重试，适合要求完全手工控制的操作。
+- [x] CLI 与 JSON 结果返回备份路径、automatic/explicit 模式和尝试次数，不把重试描述为静默保证。
+- [x] 真实三节点测试在第一次备份与 doctor 之间故意提交新区块，验证第二次备份匹配新头；degraded local 继续拒绝。
+- [ ] 所有者仍需完成真实七日自用试验；更少命令不等于证据已经产生。
+
+## v0.15 Day 1 readiness preflight
+
+- [x] `readiness preflight` 只读检查当前 `Europe/London` 日期、网络健康、journal 完整性和七日进度，不创建交易、备份、journal、锁或修复。
+- [x] local 与 distributed 模式复用现有严格 doctor；无 journal 时正常返回 `NOT_STARTED`，不会为了“检查”而产生文件。
+- [x] 状态机精确区分 `NOT_STARTED`、`IN_PROGRESS`、`RECORDED_TODAY`、`READY`、`BLOCKED`、`DAMAGED` 和 `WRONG_NETWORK`，每次只给出一个安全的下一步。
+- [x] 状态 0 表示检查成功并可按建议继续；状态 2 表示网络健康阻止使用；状态 1 表示 journal 损坏、chain ID 不符或命令错误。
+- [x] 人类输出照顾区块链新手，JSON 输出使用 version 1 合同；两者均不建议输入密码或自动绕过安全门槛。
+- [x] 真实三节点测试覆盖首次启动、进行中、当天已登记、七日就绪、损坏 journal、错误网络和停止后的网络阻塞。
+- [ ] preflight 只能降低操作认知负担，不能替代所有者真正完成七个连续日的有意义使用。
+
+## v0.16 首次初始化与恢复边界
+
+- [x] source 缺失或为空且 journal 缺失时返回 `NOT_INITIALIZED`、状态 0 和唯一 `initialize-network` 下一步，不再误导新手运行无法修复空目录的 doctor。
+- [x] local 推荐安全启动器，distributed 推荐先生成 public topology template；preflight 自身仍然零写入、零自动修复、零密码读取或输出。
+- [x] 非空但不完整或不可读 source 返回 `BLOCKED / inspect-network-source`，不覆盖潜在密钥或恢复材料。
+- [x] 有效 journal 却缺失 source 时返回 `BLOCKED / restore-network`，禁止初始化 chain ID 不同的替代链；损坏 journal 继续优先返回 `DAMAGED`。
+- [x] 已初始化但 0 个本地验证者在线时返回 `BLOCKED / start-network`，与部分在线或其他 degraded 故障的 `repair-network` 分开。
+- [x] preflight JSON 升级到 version 2，显式返回 `network.initialized`、`sourcePath` 和 `sourceStatus`。
+- [x] 自动测试覆盖 missing、empty、partial、journal-without-network、damaged-without-network、distributed missing、healthy、degraded 和 stopped 路径，并验证未产生隐式文件。
+- [ ] 所有者仍需亲自创建并保管密码、初始化 `.nova/private`，然后产生第一笔有意义的真实 Day 1 证据。

@@ -1,8 +1,8 @@
-# NOVA v0.13 安全运维手册
+# NOVA v0.16 安全运维手册
 
-这份手册以当前“所有节点运行在同一台 Windows 电脑”的日常自用阶段为主，也记录 v0.13 私网多设备的远程诊断、备份和七日 readiness 入口。它不适用于公网部署。
+这份手册以当前“所有节点运行在同一台 Windows 电脑”的日常自用阶段为主，也记录 v0.16 私网多设备的远程诊断、备份和七日 readiness 入口。它不适用于公网部署。
 
-v0.13 已能生成多设备拓扑和单验证者 bundle，从受信任管理电脑验证远端签名状态、取得 quorum 链备份，在断电重启时清理非最终残留状态，恢复常见的持久化提议锁，在退出前排空后台写任务，并保存每天真实自用的可核验摘要；但在真实七日试用和三台实际设备验收完成前，日常流程仍以单机网络为准。多设备准备请严格按 [三设备部署手册](DEPLOYMENT.md) 操作。
+v0.16 已能生成多设备拓扑和单验证者 bundle，从受信任管理电脑验证远端签名状态、取得 quorum 链备份，在断电重启时清理非最终残留状态，恢复常见的持久化提议锁，在退出前排空后台写任务，以只读 preflight 区分首次初始化、停机、故障和恢复路径，并用一次命令创建备份和保存每天真实自用的可核验摘要；但在真实七日试用和三台实际设备验收完成前，日常流程仍以单机网络为准。多设备准备请严格按 [三设备部署手册](DEPLOYMENT.md) 操作。
 
 ## 1. 首次创建
 
@@ -10,11 +10,17 @@ v0.13 已能生成多设备拓扑和单验证者 bundle，从受信任管理电�
 
 ```powershell
 npm.cmd run setup
-$env:NOVA_KEY_PASSWORD = "至少 12 位的唯一高强度密码"
+$novaSecret = Read-Host "创建或输入 NOVA 密码" -AsSecureString
+$novaPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($novaSecret)
+try {
+  $env:NOVA_KEY_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($novaPointer)
+} finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($novaPointer)
+}
 npm.cmd run nova:secure
 ```
 
-初始化先在临时目录完成所有密钥加密和配置写入，成功后才整体移动到 `.nova/private`。密码缺失、过短或写入失败不会留下可被误判为完整网络的目标目录。
+密码输入会被遮罩，明文不会进入 PowerShell 命令历史。初始化先在临时目录完成所有密钥加密和配置写入，成功后才整体移动到 `.nova/private`。密码缺失、过短或写入失败不会留下可被误判为完整网络的目标目录。
 
 创建后立即把密码保存进密码管理器，并对下列内容做离线加密备份：
 
@@ -27,12 +33,13 @@ npm.cmd run nova:secure
 
 ## 2. 日常启动与停止
 
-每个新的 PowerShell 会话都需要重新设置密码环境变量：
+每个新的 PowerShell 会话都需要用第 1 节相同的遮罩步骤重新设置密码环境变量，然后启动：
 
 ```powershell
-$env:NOVA_KEY_PASSWORD = "与首次创建时相同的密码"
 npm.cmd run nova:secure
 ```
+
+停止所有服务后运行 `Remove-Item Env:NOVA_KEY_PASSWORD`，从当前 PowerShell 会话清除密码环境变量。
 
 看到三个节点都输出 `listening` 后再开始转账。浏览器只应通过 `http://localhost:3000` 打开。正常停止使用一次 `Ctrl+C`，等待进程自行退出后再关机；不要看到端口关闭就立即强杀进程。节点会先停止接收新请求，再等待在途 gossip、同步、出块和投票锁恢复任务结束，最后才释放 `node.lock`。网络超时默认有界，正常排空可能需要数秒。
 
@@ -168,16 +175,30 @@ node src/cli.js backup restore `
 
 ## 8. 七日自用 readiness
 
-每天先完成一笔真正有用途的 transfer 或 record，并用 `tx status` 确认 `final: true`。随后在同一伦敦日期内创建并验证链备份，再登记当天证据：
+每天先运行只读 preflight。它会检查网络与 journal、显示当天状态，并只给一个下一步；没有 journal 时不会创建任何文件：
 
 ```powershell
-node src/cli.js backup create `
-  --network .nova/private `
-  --out .nova/backups/nova-YYYY-MM-DD.json
+node src/cli.js readiness preflight --network .nova/private
+```
 
+| 状态 | 含义 | 进程状态 |
+| --- | --- | --- |
+| `NOT_INITIALIZED` | source 缺失或为空且没有 journal；可以按引导首次初始化 | 0 |
+| `NOT_STARTED` | 网络健康，但还没有 readiness journal | 0 |
+| `IN_PROGRESS` | 已有有效历史，今天尚未登记 | 0 |
+| `RECORDED_TODAY` | 今天已经登记，不要重复提交 | 0 |
+| `READY` | 已有至少七个连续有效日期 | 0 |
+| `BLOCKED` | 当前网络健康不允许继续 | 2 |
+| `DAMAGED` | journal 格式、哈希或历史验证失败 | 1 |
+| `WRONG_NETWORK` | journal 的 chain ID 与当前网络不同 | 1 |
+
+`NOT_INITIALIZED` 只适用于真正空白的首次使用。非空但不完整的 source 会 `BLOCKED` 并要求保留检查；已有有效 journal 却缺少 source 时会要求恢复原链，绝不建议创建新 chain ID。Preflight 不创建交易、备份、journal、锁或修复，也不会读取或显示密码。状态 0 只表示检查成功并可按建议继续，不表示七日试验已经通过；自动化可使用 `--json` 读取 version 2 结果。
+
+当 preflight 要求产生今天的证据时，完成一笔真正有用途的 transfer 或 record，并用 `tx status` 确认 `final: true`。随后在同一伦敦日期内让 readiness 命令创建备份并登记当天证据：
+
+```powershell
 node src/cli.js readiness check `
   --network .nova/private `
-  --backup .nova/backups/nova-YYYY-MM-DD.json `
   --tx <FINAL_TRANSACTION_ID>
 
 node src/cli.js readiness report --require-ready
@@ -196,7 +217,9 @@ Journal hash: <64-character SHA-256>
 
 最后一条命令在连续七日完成前返回状态 2，这是“尚未就绪”而不是 journal 损坏。不要修改系统日期、复用交易或手工编辑 `.nova/readiness/journal.json` 来补日；命令没有日期参数，并会拒绝重复日期、重复交易、跨链证据和被改动的历史。每天另行保存有意义用途的简短说明，因为 journal 只保存协议摘要，不保存你为什么使用它。
 
-readiness journal 必须保持私有且不要提交 Git。备份链头必须与随后 doctor 观察到的健康链头完全一致；如果期间恰好产生新块，命令会安全拒绝，此时重新创建备份并立即重试即可。其 SHA-256 链用于发现意外修改，不是第三方签名或可信时间证明。七日通过后仍然不能承载真实资金或开放公网；它只关闭“这条链能否支持你的每日流程”这一项产品风险。
+自动备份保存在 `.nova/readiness/backups`。备份链头必须与随后 doctor 观察到的健康链头完全一致；如果期间恰好产生新块，命令最多自动重建三次，并显示实际尝试次数。只有这种精确的链头推进会重试；I/O、签名、校验、doctor 或 degraded network 错误都会立即失败。需要完全手工控制时可以提供 `--backup FILE`，此模式只读该文件且不重试。
+
+readiness journal 和自动备份必须保持私有且不要提交 Git。其 SHA-256 链用于发现意外修改，不是第三方签名或可信时间证明。七日通过后仍然不能承载真实资金或开放公网；它只关闭“这条链能否支持你的每日流程”这一项产品风险。
 
 ## 9. 当前不能做的事
 
