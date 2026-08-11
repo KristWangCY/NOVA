@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -9,12 +9,12 @@ import { generateKeyRecord } from "../src/core/crypto.js";
 import { createTransfer } from "../src/core/transaction.js";
 import { NovaNode } from "../src/node.js";
 import { initializeDevnet } from "../src/runtime/bootstrap.js";
-import { createNetworkBackup } from "../src/runtime/network-inspection.js";
 import { atomicWriteJson, readJson } from "../src/runtime/files.js";
 import {
   appendReadinessEvidence,
   captureReadinessDay,
   londonDate,
+  preflightReadiness,
   ReadinessJournalLock,
   summarizeReadiness,
   verifyReadinessJournal,
@@ -220,23 +220,141 @@ test("readiness CLI returns 2 until seven days qualify", (t) => {
   );
   assert.equal(ready.status, 0, ready.stderr);
   assert.equal(JSON.parse(ready.stdout).ready, true);
+
+  const conflictingBackupModes = spawnSync(
+    process.execPath,
+    [
+      cli,
+      "readiness",
+      "check",
+      "--network",
+      resolve(root, "network"),
+      "--tx",
+      "a".repeat(64),
+      "--backup",
+      resolve(root, "backup.json"),
+      "--backup-dir",
+      resolve(root, "backups"),
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(conflictingBackupModes.status, 1);
+  assert.match(conflictingBackupModes.stderr, /strict manual mode or --backup-dir for automatic mode/);
 });
 
-test("readiness captures real three-node finality and refuses a degraded local network", { timeout: 40_000 }, async (t) => {
+test("readiness captures finality, retries a head advance, and refuses a degraded local network", { timeout: 40_000 }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "nova-readiness-network-test-"));
   const basePort = 26_000 + Math.floor(Math.random() * 1_000);
-  const network = initializeDevnet({
-    directory: resolve(root, "network"),
-    basePort,
-    blockTimeMs: 800,
-    chainId: "nova-readiness-network-1",
-  });
-  const nodes = network.nodes.map(({ home }) => new NovaNode(home, { quiet: true }));
+  const networkDirectory = resolve(root, "network");
+  let nodes = [];
   t.after(async () => {
     await Promise.allSettled(nodes.map((node) => node.stop()));
     rmSync(root, { recursive: true, force: true });
   });
+
+  const uninitializedJournal = resolve(root, "readiness", "uninitialized.json");
+  const uninitialized = await preflightReadiness({
+    journalFile: uninitializedJournal,
+    networkDirectory,
+    timeoutMs: 2_000,
+  });
+  assert.equal(uninitialized.version, 2);
+  assert.equal(uninitialized.state, "NOT_INITIALIZED");
+  assert.equal(uninitialized.exitCode, 0);
+  assert.equal(uninitialized.nextAction, "initialize-network");
+  assert.equal(uninitialized.network.initialized, false);
+  assert.equal(uninitialized.network.sourceStatus, "missing");
+  assert.equal(uninitialized.recommendation.command, "npm.cmd run nova:secure");
+  assert.equal(existsSync(networkDirectory), false);
+  assert.equal(existsSync(uninitializedJournal), false);
+
+  const distributed = await preflightReadiness({
+    journalFile: resolve(root, "readiness", "distributed-uninitialized.json"),
+    deploymentDirectory: resolve(root, "distributed"),
+    timeoutMs: 2_000,
+  });
+  assert.equal(distributed.state, "NOT_INITIALIZED");
+  assert.equal(distributed.mode, "distributed");
+  assert.match(distributed.recommendation.command, /network template/);
+  assert.equal(existsSync(resolve(root, "distributed")), false);
+
+  mkdirSync(resolve(root, "readiness"), { recursive: true });
+  const historyWithoutNetworkFile = resolve(root, "readiness", "history-without-network.json");
+  atomicWriteJson(
+    historyWithoutNetworkFile,
+    appendReadinessEvidence(null, syntheticEvidence("2026-07-01", 69)),
+  );
+  const historyWithoutNetwork = await preflightReadiness({
+    journalFile: historyWithoutNetworkFile,
+    networkDirectory,
+    timeoutMs: 2_000,
+  });
+  assert.equal(historyWithoutNetwork.state, "BLOCKED");
+  assert.equal(historyWithoutNetwork.exitCode, 2);
+  assert.equal(historyWithoutNetwork.nextAction, "restore-network");
+  assert.equal(historyWithoutNetwork.recommendation.command, null);
+
+  const damagedWithoutNetworkFile = resolve(root, "readiness", "damaged-without-network.json");
+  atomicWriteJson(damagedWithoutNetworkFile, { version: 999 });
+  const damagedWithoutNetwork = await preflightReadiness({
+    journalFile: damagedWithoutNetworkFile,
+    networkDirectory,
+    timeoutMs: 2_000,
+  });
+  assert.equal(damagedWithoutNetwork.state, "DAMAGED");
+  assert.equal(damagedWithoutNetwork.exitCode, 1);
+
+  const emptyNetworkDirectory = resolve(root, "empty-network");
+  mkdirSync(emptyNetworkDirectory);
+  const emptyNetwork = await preflightReadiness({
+    journalFile: resolve(root, "readiness", "empty-network.json"),
+    networkDirectory: emptyNetworkDirectory,
+    timeoutMs: 2_000,
+  });
+  assert.equal(emptyNetwork.state, "NOT_INITIALIZED");
+  assert.equal(emptyNetwork.network.sourceStatus, "empty");
+  assert.deepEqual(readdirSync(emptyNetworkDirectory), []);
+
+  const partialNetworkDirectory = resolve(root, "partial-network");
+  mkdirSync(partialNetworkDirectory);
+  atomicWriteJson(resolve(partialNetworkDirectory, "preserve.json"), { reason: "partial setup" });
+  const partialNetwork = await preflightReadiness({
+    journalFile: resolve(root, "readiness", "partial-network.json"),
+    networkDirectory: partialNetworkDirectory,
+    timeoutMs: 2_000,
+  });
+  assert.equal(partialNetwork.state, "BLOCKED");
+  assert.equal(partialNetwork.exitCode, 2);
+  assert.equal(partialNetwork.nextAction, "inspect-network-source");
+  assert.equal(partialNetwork.recommendation.command, null);
+  assert.equal(existsSync(resolve(partialNetworkDirectory, "preserve.json")), true);
+
+  const network = initializeDevnet({
+    directory: networkDirectory,
+    basePort,
+    blockTimeMs: 800,
+    chainId: "nova-readiness-network-1",
+  });
+  nodes = network.nodes.map(({ home }) => new NovaNode(home, { quiet: true }));
   await Promise.all(nodes.map((node) => node.start()));
+
+  const notStarted = await preflightReadiness({
+    journalFile: resolve(root, "readiness", "not-started.json"),
+    networkDirectory: network.directory,
+    timeoutMs: 2_000,
+  });
+  assert.equal(notStarted.state, "NOT_STARTED");
+  assert.equal(notStarted.exitCode, 0);
+  assert.equal(notStarted.version, 2);
+  assert.equal(notStarted.type, "nova-readiness-preflight");
+  assert.equal(notStarted.network.healthy, true);
+  assert.equal(notStarted.network.initialized, true);
+  assert.equal(notStarted.network.sourceStatus, "present");
+  assert.equal(notStarted.journal.status, "missing");
+  assert.equal(notStarted.trial.recordedDays, 0);
+  assert.equal(notStarted.nextAction, "commit-meaningful-transaction");
+  assert.equal(existsSync(resolve(root, "readiness", "not-started.json")), false);
+  assert.equal(existsSync(resolve(root, "readiness", "not-started.json.lock")), false);
 
   const faucet = readJson(network.faucet.keyFile);
   const recipient = generateKeyRecord("readiness-recipient");
@@ -255,12 +373,10 @@ test("readiness captures real three-node finality and refuses a degraded local n
     "three-node transaction finality",
   );
 
-  const backupFile = resolve(root, "backup.json");
-  createNetworkBackup(network.directory, backupFile);
   const journalFile = resolve(root, "readiness", "journal.json");
   const captured = await captureReadinessDay({
     journalFile,
-    backupFile,
+    automaticBackupDirectory: resolve(root, "readiness", "backups"),
     transactionId: transaction.id,
     networkDirectory: network.directory,
     timeoutMs: 2_000,
@@ -269,15 +385,147 @@ test("readiness captures real three-node finality and refuses a degraded local n
   assert.equal(captured.entry.mode, "local");
   assert.equal(captured.entry.doctor.onlineValidators, 3);
   assert.equal(captured.report.ready, false);
+  assert.equal(captured.backupMode, "automatic");
+  assert.equal(captured.backupAttempts, 1);
+  assert.equal(existsSync(captured.backupFile), true);
   assert.equal(verifyReadinessJournal(readJson(journalFile)).entries.length, 1);
   assert.equal(existsSync(`${journalFile}.lock`), false);
 
+  const recordedToday = await preflightReadiness({
+    journalFile,
+    networkDirectory: network.directory,
+    timeoutMs: 2_000,
+    now: captured.entry.recordedAt,
+  });
+  assert.equal(recordedToday.state, "RECORDED_TODAY");
+  assert.equal(recordedToday.exitCode, 0);
+  assert.equal(recordedToday.trial.todayRecorded, true);
+  assert.equal(recordedToday.nextAction, "return-tomorrow");
+
+  const damagedJournal = resolve(root, "readiness", "damaged.json");
+  atomicWriteJson(damagedJournal, { version: 2 });
+  const damaged = await preflightReadiness({
+    journalFile: damagedJournal,
+    networkDirectory: network.directory,
+    timeoutMs: 2_000,
+  });
+  assert.equal(damaged.state, "DAMAGED");
+  assert.equal(damaged.exitCode, 1);
+  assert.equal(damaged.journal.status, "damaged");
+  assert.match(damaged.journal.error, /unsupported or missing fields/);
+
+  const wrongNetworkJournal = resolve(root, "readiness", "wrong-network.json");
+  atomicWriteJson(
+    wrongNetworkJournal,
+    appendReadinessEvidence(null, syntheticEvidence("2026-07-01", 71)),
+  );
+  const wrongNetwork = await preflightReadiness({
+    journalFile: wrongNetworkJournal,
+    networkDirectory: network.directory,
+    timeoutMs: 2_000,
+  });
+  assert.equal(wrongNetwork.state, "WRONG_NETWORK");
+  assert.equal(wrongNetwork.exitCode, 1);
+  assert.equal(wrongNetwork.nextAction, "select-matching-network");
+
+  const inProgressJournal = resolve(root, "readiness", "in-progress.json");
+  atomicWriteJson(
+    inProgressJournal,
+    appendReadinessEvidence(
+      null,
+      syntheticEvidence("2026-07-01", 72, { chainId: network.genesis.chainId }),
+    ),
+  );
+  const inProgress = await preflightReadiness({
+    journalFile: inProgressJournal,
+    networkDirectory: network.directory,
+    timeoutMs: 2_000,
+    now: Date.parse("2026-07-02T12:00:00Z"),
+  });
+  assert.equal(inProgress.state, "IN_PROGRESS");
+  assert.equal(inProgress.exitCode, 0);
+  assert.equal(inProgress.trial.currentStreak, 1);
+
+  let readyEvidence = null;
+  for (let day = 1; day <= 7; day += 1) {
+    readyEvidence = appendReadinessEvidence(
+      readyEvidence,
+      syntheticEvidence(`2026-07-0${day}`, 80 + day, { chainId: network.genesis.chainId }),
+    );
+  }
+  const readyJournal = resolve(root, "readiness", "ready.json");
+  atomicWriteJson(readyJournal, readyEvidence);
+  const readyPreflight = await preflightReadiness({
+    journalFile: readyJournal,
+    networkDirectory: network.directory,
+    timeoutMs: 2_000,
+    now: Date.parse("2026-07-08T12:00:00Z"),
+  });
+  assert.equal(readyPreflight.state, "READY");
+  assert.equal(readyPreflight.exitCode, 0);
+  assert.equal(readyPreflight.trial.ready, true);
+  assert.equal(readyPreflight.nextAction, "review-trial");
+
+  const advancingTransaction = createTransfer({
+    chainId: network.genesis.chainId,
+    key: faucet,
+    to: recipient.address,
+    amount: "1000",
+    fee: "1",
+    nonce: 2,
+    memo: "advance the head during automatic backup capture",
+  });
+  const originalFetch = globalThis.fetch;
+  let advancePromise = null;
+  let headAdvanced = false;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === "string" ? input : input.url;
+    if (new URL(url).pathname === "/status" && !headAdvanced) {
+      advancePromise ??= (async () => {
+        nodes[0].addTransaction(advancingTransaction);
+        await waitFor(
+          () => nodes.every((node) => node.transactionReceipt(advancingTransaction.id).final),
+          "head advancement during readiness capture",
+        );
+        headAdvanced = true;
+      })();
+      await advancePromise;
+    }
+    return originalFetch(input, init);
+  };
+  let retried;
+  try {
+    retried = await captureReadinessDay({
+      journalFile: resolve(root, "readiness", "retried.json"),
+      automaticBackupDirectory: resolve(root, "readiness", "retried-backups"),
+      transactionId: transaction.id,
+      networkDirectory: network.directory,
+      timeoutMs: 2_000,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(retried.backupMode, "automatic");
+  assert.equal(retried.backupAttempts, 2);
+  assert.equal(retried.entry.backup.height, retried.entry.doctor.height);
+  assert.equal(retried.entry.backup.blockHash, retried.entry.doctor.blockHash);
+
   await nodes[2].stop();
+  const blocked = await preflightReadiness({
+    journalFile,
+    networkDirectory: network.directory,
+    timeoutMs: 1_000,
+  });
+  assert.equal(blocked.state, "BLOCKED");
+  assert.equal(blocked.exitCode, 2);
+  assert.equal(blocked.network.healthy, false);
+  assert.equal(blocked.nextAction, "repair-network");
+
   const refusedJournal = resolve(root, "readiness", "degraded.json");
   await assert.rejects(
     captureReadinessDay({
       journalFile: refusedJournal,
-      backupFile,
+      backupFile: captured.backupFile,
       transactionId: transaction.id,
       networkDirectory: network.directory,
       timeoutMs: 1_000,
@@ -286,4 +534,17 @@ test("readiness captures real three-node finality and refuses a degraded local n
   );
   assert.equal(existsSync(refusedJournal), false);
   assert.equal(existsSync(`${refusedJournal}.lock`), false);
+
+  await Promise.all(nodes.map((node) => node.stop()));
+  const stopped = await preflightReadiness({
+    journalFile,
+    networkDirectory: network.directory,
+    timeoutMs: 1_000,
+  });
+  assert.equal(stopped.state, "BLOCKED");
+  assert.equal(stopped.exitCode, 2);
+  assert.equal(stopped.network.initialized, true);
+  assert.equal(stopped.network.onlineValidators, 0);
+  assert.equal(stopped.nextAction, "start-network");
+  assert.equal(stopped.recommendation.command, "npm.cmd run nova:secure");
 });

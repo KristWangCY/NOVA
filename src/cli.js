@@ -19,7 +19,12 @@ import {
   verifyValidatorBundle,
 } from "./runtime/validator-bundle.js";
 import { createRemoteNetworkBackup, diagnoseRemoteDeployment } from "./runtime/remote-network.js";
-import { captureReadinessDay, summarizeReadiness } from "./runtime/readiness.js";
+import {
+  captureReadinessDay,
+  preflightReadiness,
+  READINESS_AUTOMATIC_BACKUP_ATTEMPTS,
+  summarizeReadiness,
+} from "./runtime/readiness.js";
 
 function parseOptions(args) {
   const options = { _: [] };
@@ -97,8 +102,10 @@ Commands:
   nova backup create --deployment .nova/distributed --out .nova/backups/nova.json [--timeout 5000]
   nova backup verify --file .nova/backups/nova.json
   nova backup restore --home .nova/devnet/node1 --file .nova/backups/nova.json
-  nova readiness check --network .nova/private --backup .nova/backups/nova-YYYY-MM-DD.json --tx TRANSACTION_ID
-  nova readiness check --deployment .nova/distributed --backup .nova/backups/nova-YYYY-MM-DD.json --tx TRANSACTION_ID
+  nova readiness check --network .nova/private --tx TRANSACTION_ID [--backup FILE | --backup-dir DIR]
+  nova readiness check --deployment .nova/distributed --tx TRANSACTION_ID [--backup FILE | --backup-dir DIR]
+  nova readiness preflight --network .nova/private [--journal FILE] [--timeout 1500] [--json]
+  nova readiness preflight --deployment .nova/distributed [--journal FILE] [--timeout 1500] [--json]
   nova readiness report [--journal .nova/readiness/journal.json] [--json] [--require-ready]
   nova status [--url http://127.0.0.1:4101]
   nova account create --out .nova/alice-keystore.json [--label alice] [--password-env NOVA_KEY_PASSWORD]
@@ -143,6 +150,26 @@ function printReadinessReport(report) {
     console.log(`Remaining consecutive days: ${report.remainingDays}`);
   }
   console.log(`Journal hash: ${report.journalHash}`);
+}
+
+function printReadinessPreflight(result) {
+  console.log(`NOVA readiness preflight: ${result.state}`);
+  console.log(`Date: ${result.date} (${result.timeZone})`);
+  const head = result.network.height === null
+    ? "no verified head"
+    : `height ${result.network.height} ${result.network.blockHash}`;
+  const networkLabel = result.state === "NOT_INITIALIZED"
+    ? "NOT INITIALIZED"
+    : result.network.healthy ? "HEALTHY" : "BLOCKED";
+  console.log(`Network: ${networkLabel} — ${result.network.onlineValidators}/${result.network.expectedValidators} online, ${head}`);
+  console.log(`Source: ${result.network.sourceStatus} — ${result.network.sourcePath}`);
+  console.log(`Journal: ${result.journal.status} — ${result.journal.path}`);
+  console.log(`Trial: ${result.trial.recordedDays} day(s), current ${result.trial.currentStreak}/${result.trial.requiredConsecutiveDays}, longest ${result.trial.longestStreak}`);
+  if (result.network.issue) console.log(`Network issue: ${result.network.issue}`);
+  if (result.journal.error) console.log(`Journal issue: ${result.journal.error}`);
+  console.log(`Next action: ${result.nextAction}`);
+  console.log(result.recommendation.message);
+  if (result.recommendation.command) console.log(`Command: ${result.recommendation.command}`);
 }
 
 export async function runCli(argv = process.argv.slice(2)) {
@@ -350,9 +377,17 @@ export async function runCli(argv = process.argv.slice(2)) {
       throw new Error("choose exactly one of --network or --deployment for a readiness check");
     }
     const timeoutMs = Number(options.timeout || 1500);
+    const journalFile = resolve(options.journal || ".nova/readiness/journal.json");
+    if (options.backup && options.backupDir) {
+      throw new Error("choose --backup for strict manual mode or --backup-dir for automatic mode, not both");
+    }
+    const backupFile = options.backup ? resolve(required(options, "backup")) : undefined;
     const result = await captureReadinessDay({
-      journalFile: resolve(options.journal || ".nova/readiness/journal.json"),
-      backupFile: resolve(required(options, "backup")),
+      journalFile,
+      backupFile,
+      automaticBackupDirectory: backupFile
+        ? undefined
+        : resolve(options.backupDir ? required(options, "backupDir") : ".nova/readiness/backups"),
       transactionId: required(options, "tx"),
       networkDirectory: options.network ? resolve(options.network) : undefined,
       deploymentDirectory: options.deployment ? resolve(options.deployment) : undefined,
@@ -364,9 +399,30 @@ export async function runCli(argv = process.argv.slice(2)) {
       console.log(`Recorded readiness evidence for ${result.entry.date}`);
       console.log(`Transaction: ${result.entry.transaction.type} ${result.entry.transaction.id} at height ${result.entry.transaction.height}`);
       console.log(`Doctor: ${result.entry.doctor.onlineValidators}/${result.entry.doctor.expectedValidators} validators online at height ${result.entry.doctor.height}`);
-      console.log(`Backup: height ${result.entry.backup.height} ${result.entry.backup.snapshotHash}`);
+      console.log(`Backup: ${result.backupMode} ${result.backupFile}`);
+      console.log(`Backup head: height ${result.entry.backup.height} ${result.entry.backup.snapshotHash}`);
+      if (result.backupAttempts > 1) {
+        console.log(`Automatic backup attempts: ${result.backupAttempts}/${READINESS_AUTOMATIC_BACKUP_ATTEMPTS}`);
+      }
       printReadinessReport(result.report);
     }
+    return;
+  }
+
+  if (group === "readiness" && action === "preflight") {
+    const sources = [options.network, options.deployment].filter(Boolean);
+    if (sources.length !== 1) {
+      throw new Error("choose exactly one of --network or --deployment for a readiness preflight");
+    }
+    const result = await preflightReadiness({
+      journalFile: resolve(options.journal || ".nova/readiness/journal.json"),
+      networkDirectory: options.network ? resolve(options.network) : undefined,
+      deploymentDirectory: options.deployment ? resolve(options.deployment) : undefined,
+      timeoutMs: Number(options.timeout || 1500),
+    });
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else printReadinessPreflight(result);
+    if (result.exitCode !== 0) process.exitCode = result.exitCode;
     return;
   }
 
