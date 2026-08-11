@@ -19,6 +19,7 @@ import {
   verifyValidatorBundle,
 } from "./runtime/validator-bundle.js";
 import { createRemoteNetworkBackup, diagnoseRemoteDeployment } from "./runtime/remote-network.js";
+import { captureReadinessDay, summarizeReadiness } from "./runtime/readiness.js";
 
 function parseOptions(args) {
   const options = { _: [] };
@@ -96,6 +97,9 @@ Commands:
   nova backup create --deployment .nova/distributed --out .nova/backups/nova.json [--timeout 5000]
   nova backup verify --file .nova/backups/nova.json
   nova backup restore --home .nova/devnet/node1 --file .nova/backups/nova.json
+  nova readiness check --network .nova/private --backup .nova/backups/nova-YYYY-MM-DD.json --tx TRANSACTION_ID
+  nova readiness check --deployment .nova/distributed --backup .nova/backups/nova-YYYY-MM-DD.json --tx TRANSACTION_ID
+  nova readiness report [--journal .nova/readiness/journal.json] [--json] [--require-ready]
   nova status [--url http://127.0.0.1:4101]
   nova account create --out .nova/alice-keystore.json [--label alice] [--password-env NOVA_KEY_PASSWORD]
   nova account inspect --key .nova/alice-keystore.json
@@ -126,6 +130,19 @@ function printDiagnosis(report) {
   if (report.backupSource) {
     console.log(`Recommended backup source: ${report.backupSource.name} at height ${report.backupSource.height}`);
   }
+}
+
+function printReadinessReport(report) {
+  console.log(`NOVA readiness: ${report.ready ? "READY" : "IN PROGRESS"}`);
+  console.log(`Chain: ${report.chainId}`);
+  console.log(`Evidence: ${report.recordedDays} day(s), current streak ${report.currentStreak}/${report.requiredConsecutiveDays}`);
+  console.log(`Period: ${report.firstDate} to ${report.lastDate} (${report.timeZone})`);
+  if (report.ready) {
+    console.log(`Qualified: ${report.qualifyingPeriod.from} to ${report.qualifyingPeriod.to}`);
+  } else {
+    console.log(`Remaining consecutive days: ${report.remainingDays}`);
+  }
+  console.log(`Journal hash: ${report.journalHash}`);
 }
 
 export async function runCli(argv = process.argv.slice(2)) {
@@ -324,6 +341,41 @@ export async function runCli(argv = process.argv.slice(2)) {
     const result = restoreBackup(home, resolve(required(options, "file")));
     const { state, ...publicResult } = result;
     console.log(JSON.stringify(publicResult, null, 2));
+    return;
+  }
+
+  if (group === "readiness" && action === "check") {
+    const sources = [options.network, options.deployment].filter(Boolean);
+    if (sources.length !== 1) {
+      throw new Error("choose exactly one of --network or --deployment for a readiness check");
+    }
+    const timeoutMs = Number(options.timeout || 1500);
+    const result = await captureReadinessDay({
+      journalFile: resolve(options.journal || ".nova/readiness/journal.json"),
+      backupFile: resolve(required(options, "backup")),
+      transactionId: required(options, "tx"),
+      networkDirectory: options.network ? resolve(options.network) : undefined,
+      deploymentDirectory: options.deployment ? resolve(options.deployment) : undefined,
+      timeoutMs,
+    });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`Recorded readiness evidence for ${result.entry.date}`);
+      console.log(`Transaction: ${result.entry.transaction.type} ${result.entry.transaction.id} at height ${result.entry.transaction.height}`);
+      console.log(`Doctor: ${result.entry.doctor.onlineValidators}/${result.entry.doctor.expectedValidators} validators online at height ${result.entry.doctor.height}`);
+      console.log(`Backup: height ${result.entry.backup.height} ${result.entry.backup.snapshotHash}`);
+      printReadinessReport(result.report);
+    }
+    return;
+  }
+
+  if (group === "readiness" && action === "report") {
+    const journal = readJson(resolve(options.journal || ".nova/readiness/journal.json"));
+    const report = summarizeReadiness(journal);
+    if (options.json) console.log(JSON.stringify(report, null, 2));
+    else printReadinessReport(report);
+    if (options.requireReady && !report.ready) process.exitCode = 2;
     return;
   }
 

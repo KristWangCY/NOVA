@@ -1,8 +1,8 @@
 # NOVA
 
-NOVA is an independent blockchain designed for personal, self-hosted use. The current `v0.12.0` release can run three validator nodes on a single Windows computer and generate separately encrypted validator deployment bundles for three independent devices. Accounts and validators use Ed25519 signatures, blocks are committed only after receiving signatures from at least two of the three validators, and every node independently replays transactions and verifies the resulting state root.
+NOVA is an independent blockchain designed for personal, self-hosted use. The current `v0.13.0` release can run three validator nodes on a single Windows computer and generate separately encrypted validator deployment bundles for three independent devices. Accounts and validators use Ed25519 signatures, blocks are committed only after receiving signatures from at least two of the three validators, and every node independently replays transactions and verifies the resulting state root.
 
-This release securely stores encrypted private keys, reports final transaction receipts, diagnoses the health of a three-node network, automatically selects a trustworthy backup source, and provides NOVA's first practical personal-use feature: immutable SHA-256 proofs for local files. A proposer signs its own proposal only after collecting enough valid peer votes. Valid persisted locks can be retried automatically with signed evidence, preventing common liveness failures caused by staggered startup or lost responses. During shutdown, a node first closes HTTP access, drains synchronization, proposal, recovery, and gossip tasks, and releases its node-home lock only after those tasks finish, preventing old and new processes from writing to disk at the same time.
+This release securely stores encrypted private keys, reports final transaction receipts, diagnoses the health of a three-node network, automatically selects a trustworthy backup source, and provides NOVA's first practical personal-use feature: immutable SHA-256 proofs for local files. It also adds a seven-day readiness journal that accepts a day only when a meaningful transfer or record is finally committed, the live network agrees on one head, and a verified same-day chain backup covers that transaction. The local journal is versioned, atomically written, single-writer locked, and hash-chained so accidental or partial edits are detected.
 
 NOVA is still a protocol prototype for learning and validating requirements. **Do not use it to hold real value or expose it directly to the public internet.**
 
@@ -23,7 +23,7 @@ npm.cmd run nova:secure
 
 On its first run, this command atomically creates three nodes, the genesis configuration, and an encrypted faucet under `.nova/private`. Later runs continue the existing chain. The Explorer is available at [http://localhost:3000](http://localhost:3000), and the node APIs listen on `http://127.0.0.1:4101` through `4103`. Press `Ctrl+C` to stop all services.
 
-The password is never written to disk. Store it in a password manager; if it is lost, the validator and faucet private keys cannot be recovered. For convenience, the single-machine mode encrypts all four private keys with the same startup password. The v0.12 multi-device workflow requires four different passwords: one for the faucet and one for each validator. Validator key rotation is not implemented yet.
+The password is never written to disk. Store it in a password manager; if it is lost, the validator and faucet private keys cannot be recovered. For convenience, the single-machine mode encrypts all four private keys with the same startup password. The v0.13 multi-device workflow requires four different passwords: one for the faucet and one for each validator. Validator key rotation is not implemented yet.
 
 ## Prepare a three-device network
 
@@ -123,6 +123,38 @@ You can also select **Verify local file** at [http://localhost:3000](http://loca
 
 A record proves that the signing account committed a digest of those exact bytes no later than the block's recorded time. It does not automatically prove that the content is true, lawful, or original. Titles, categories, notes, file sizes, and raw digests remain visible to every chain participant permanently. Never put secrets in public metadata; hashes of low-entropy sensitive content may also be guessed.
 
+## Run the seven-day personal readiness trial
+
+The readiness trial measures whether NOVA can support one real personal workflow every day for a week. It does not create transactions automatically: first make a transfer or file record that has an actual purpose, wait until `tx status` reports `final: true`, then create a same-day verified backup.
+
+For the single-machine private network:
+
+```powershell
+node src/cli.js backup create `
+  --network .nova/private `
+  --out .nova/backups/nova-YYYY-MM-DD.json
+
+node src/cli.js readiness check `
+  --network .nova/private `
+  --backup .nova/backups/nova-YYYY-MM-DD.json `
+  --tx <FINAL_TRANSACTION_ID>
+
+node src/cli.js readiness report
+```
+
+For a three-device deployment, create the backup with `--deployment`, then use the matching readiness mode:
+
+```powershell
+node src/cli.js readiness check `
+  --deployment .nova/distributed `
+  --backup .nova/backups/nova-YYYY-MM-DD.json `
+  --tx <FINAL_TRANSACTION_ID>
+```
+
+The command derives the date from the system clock in `Europe/London`; it has no option to backfill a date. A local day requires all configured validators online with one head. A distributed day allows one unavailable validator only when an authenticated quorum agrees on one head. The verified backup must match that observed healthy head exactly, so create it immediately before the check and retry with a fresh backup if a new block appears. Duplicate dates or transactions, cross-chain evidence, stale or conflicting backups, and modified journal history are rejected. Use `readiness report --require-ready` in automation; it exits with status 2 until a verified seven-day streak exists.
+
+The default journal is `.nova/readiness/journal.json` and must stay private and out of Git. Its hashes detect unintentional edits but are not signatures, trusted timestamps, or independent third-party proof: an owner who controls the computer and recomputes the whole file can fabricate it. Passing seven days proves only that the current self-use routine was sustained; it does not make NOVA safe for real funds or the public internet.
+
 ## Development network and tests
 
 `npm.cmd run nova` starts a development network and Explorer with plaintext test keys. Use it only for automated testing and demonstrations. `npm.cmd run demo` executes a three-node transfer in a temporary directory and cleans it up automatically. Use `nova:secure` for routine personal operation.
@@ -181,10 +213,11 @@ flowchart LR
 - JSON file storage does not provide database transactions, incremental snapshots, pruning, or mature disaster recovery.
 - Record queries currently scan the complete chain. This is suitable for personal-scale use, not large file indexes.
 - NOVA has no dynamic validators, governance, smart contracts, cross-chain support, private transactions, or validator key rotation.
-- The local Explorer must not be published directly to the internet. Remote access requires a secure, read-only gateway first. v0.12 provides signed remote diagnostics, quorum backups, crash-state cleanup, recovery for common lock states, and graceful shutdown, but the owner has not yet completed acceptance testing on three physical devices.
+- The local Explorer must not be published directly to the internet. Remote access requires a secure, read-only gateway first. v0.13 provides signed remote diagnostics, quorum backups, crash-state cleanup, recovery for common lock states, graceful shutdown, and the readiness evidence collector, but the owner has not yet completed either a real seven-day trial or acceptance testing on three physical devices.
 - `node.lock` prevents two processes from writing to the same node home and recovers locks left by dead process IDs. It is not a distributed lock.
+- The readiness journal's SHA-256 chain detects accidental or partial edits; it is not a signature, trusted timestamp, or proof against an owner who controls the computer and recomputes the journal.
 
-Architecture decisions are recorded in [ADR 0001](docs/adr/0001-node-prototype.md) through [ADR 0012](docs/adr/0012-graceful-node-shutdown.md). See the [product brief](docs/PRODUCT.md), [roadmap](docs/ROADMAP.md), and [protocol summary](docs/PROTOCOL.md) for scope, delivery stages, and protocol formats.
+Architecture decisions are recorded in [ADR 0001](docs/adr/0001-node-prototype.md) through [ADR 0013](docs/adr/0013-personal-readiness-evidence.md). See the [product brief](docs/PRODUCT.md), [roadmap](docs/ROADMAP.md), and [protocol summary](docs/PROTOCOL.md) for scope, delivery stages, and protocol formats.
 
 ## Project principles
 

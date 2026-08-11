@@ -1,4 +1,4 @@
-# NOVA v0.12 协议摘要
+# NOVA v0.13 协议摘要
 
 本文记录当前实现的持久化和签名边界。代码是最终权威来源；任何不兼容修改必须先增加协议版本和测试向量。
 
@@ -196,3 +196,13 @@ record 查询当前从新到旧扫描签名区块，不维护额外状态索引�
 正常停止采用单向生命周期，顺序固定为：标记 `stopping` 并拒绝创建新后台任务；清除 producer/sync timers；关闭 HTTP server 并等待在途请求完成；等待已登记的 transaction gossip、同步、出块和投票锁恢复 promise 全部 settle；最后释放 `node.lock`。同一实例上的重复 stop 共享同一排空过程。锁释放后实例标记为永久 stopped，不能重新监听、启动后台任务或通过节点 mutation 方法写 home；恢复运行必须创建新的 `NovaNode` 并重新取得锁。
 
 这保证旧实例的异步 writer 不会在新实例取得相同 home 后继续落盘。进程被操作系统强制终止时无法执行优雅排空，下一次启动仍依赖原子文件、陈旧 PID 锁回收、签名链重放和上述非最终状态恢复。
+
+## 本地 readiness journal v1
+
+`nova-readiness-journal` version 1 是默认保存在 `.nova/readiness/journal.json` 的本地自用证据索引，不属于链上共识。顶层使用精确字段：`version`、`type`、`timeZone`、`chainId`、`createdAt`、`updatedAt`、`entries` 和 `journalHash`；未知、缺失字段或非 version 1 文件均拒绝。
+
+每个 `nova-readiness-day` version 1 条目记录 `Europe/London` 日期、采集时间、local/distributed 模式、chain ID、最终交易摘要、doctor 链头摘要、已验证备份摘要、前一条目哈希和当前条目哈希。日期必须严格递增，日期和交易 ID 均不可重复；交易、备份、doctor 和采集时间必须属于同一伦敦日，备份必须覆盖该交易且其高度、区块哈希必须与诊断链头完全相同。严格相等避免仅凭相同 chain ID 把较旧备份错误关联到后续分叉；若备份后产生了新块，操作者需要立即重建备份再检查。
+
+local 条目要求所有配置验证者在线且同意一个链头。distributed 条目要求有效签名状态达到 quorum、在线链头一致，并继续服从远程诊断的身份、challenge、时间窗与冲突检查。采集命令不接受自定义日期，只在当前证据全部验证后原子写入；`${journal}.lock` 使用排他创建与死亡 PID 回收，防止两个进程同时追加。
+
+条目哈希是移除 `entryHash` 后对 canonical JSON 做 SHA-256；`journalHash` 同理排除自身字段。它能发现意外编辑、部分写入和未同步修改，但不是 Ed25519 签名、可信时间戳、Merkle inclusion proof 或独立见证。控制本机并重算全部哈希的所有者可以伪造历史，因此 readiness 只能证明当前自用流程按本机证据持续运行，不能提升共识安全等级或支持真实资金与公网声明。
