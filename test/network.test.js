@@ -9,7 +9,7 @@ import { createPeerAuthHeaders } from "../src/core/peer-auth.js";
 import { createRecord, createTransfer } from "../src/core/transaction.js";
 import { NovaNode } from "../src/node.js";
 import { initializeDevnet } from "../src/runtime/bootstrap.js";
-import { readJson } from "../src/runtime/files.js";
+import { atomicWriteJson, readJson } from "../src/runtime/files.js";
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -26,6 +26,14 @@ test("three validators finalize and replicate a signed transfer", { timeout: 250
   const root = mkdtempSync(join(tmpdir(), "nova-network-test-"));
   const basePort = 20000 + Math.floor(Math.random() * 20000);
   const network = initializeDevnet({ directory: root, basePort, blockTimeMs: 800 });
+  for (const { home } of network.nodes) {
+    const configPath = join(home, "config.json");
+    const config = readJson(configPath);
+    assert.equal(Object.hasOwn(config, "emptyBlockIntervalMs"), false);
+    // A v0.19 node config may still contain this field. v0.20 must ignore it
+    // instead of rewriting an owner's existing network files.
+    atomicWriteJson(configPath, { ...config, emptyBlockIntervalMs: 100 });
+  }
   const nodes = network.nodes.map(({ home }) => new NovaNode(home, { quiet: true }));
   t.after(async () => {
     await Promise.allSettled(nodes.map((node) => node.stop()));
@@ -33,8 +41,11 @@ test("three validators finalize and replicate a signed transfer", { timeout: 250
   });
 
   await Promise.all(nodes.map((node) => node.start()));
-  await delay(network.genesis.blockTimeMs * 2);
-  assert.ok(nodes.every((node) => node.status().height === 0), "idle nodes should not produce rapid empty blocks");
+  await delay(network.genesis.blockTimeMs * 3);
+  assert.ok(
+    nodes.every((node) => node.status().height === 0),
+    "idle nodes should not produce blocks even after multiple legacy empty-block intervals",
+  );
   assert.ok(nodes.every((node) => node.status().peerAuthentication === "ed25519-v1"));
 
   const faucet = readJson(network.faucet.keyFile);
@@ -115,6 +126,12 @@ test("three validators finalize and replicate a signed transfer", { timeout: 250
   );
   assert.ok(nodes.every((node) => node.storage.chain.some((block) => block.transactions.some(({ id }) => id === transaction.id))));
   assert.ok(nodes.every((node) => node.storage.state.burnedFees === "7"));
+  const transferHeight = nodes[0].status().height;
+  await delay(network.genesis.blockTimeMs * 3);
+  assert.ok(
+    nodes.every((node) => node.status().height === transferHeight),
+    "an idle finalized chain should remain at the same height",
+  );
 
   const receiptResponse = await fetch(`${network.nodes[2].url}/transactions/${transaction.id}`);
   assert.equal(receiptResponse.status, 200);

@@ -171,6 +171,46 @@ test("a validator recovers a persisted proposal after the original response is l
   await waitFor(() => nodes[2].transactionReceipt(transaction.id).final, "recovered block synchronization");
 });
 
+test("a persisted empty proposal is recovered and remains synchronizable", { timeout: 20_000 }, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "nova-empty-lock-recovery-test-"));
+  const network = initializeDevnet({
+    directory: resolve(root, "network"),
+    basePort: 19600 + Math.floor(Math.random() * 80),
+    blockTimeMs: 800,
+    chainId: "nova-empty-lock-recovery-test-1",
+  });
+  const nodes = network.nodes.map(({ home }) => new NovaNode(home, { quiet: true }));
+  t.after(async () => {
+    await Promise.allSettled(nodes.map((node) => node.stop()));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const slot = nextSlot(network.genesis);
+  const proposer = nodes[slot % nodes.length];
+  const proposal = createProposal({
+    genesis: network.genesis,
+    tip: nodes[0].storage.tip,
+    state: nodes[0].storage.state,
+    transactions: [],
+    key: proposer.key,
+    slot,
+    timestamp: slot * network.genesis.blockTimeMs,
+  });
+  nodes[1].signProposal(proposal);
+
+  await Promise.all([nodes[0].start(), nodes[1].start()]);
+  await waitFor(
+    () => [nodes[0], nodes[1]].every((node) => node.status().height === 1),
+    "persisted empty proposal recovery",
+  );
+  assert.ok([nodes[0], nodes[1]].every((node) => node.storage.tip.transactions.length === 0));
+
+  await nodes[2].start();
+  await waitFor(() => nodes[2].status().height === 1, "historical empty block synchronization");
+  assert.equal(nodes[2].status().blockHash, nodes[0].status().blockHash);
+  assert.equal(nodes[2].storage.tip.transactions.length, 0);
+});
+
 test("two conflicting persisted locks converge through the remaining unlocked validator", { timeout: 20_000 }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "nova-conflicting-lock-liveness-test-"));
   const network = initializeDevnet({
