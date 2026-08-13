@@ -505,11 +505,10 @@ export class NovaNode {
       if (this.storage.tip.header.slot >= slot) {
         return;
       }
-      const emptyBlockIntervalMs = this.config.emptyBlockIntervalMs ?? 30000;
-      if (
-        this.storage.mempool.length === 0
-        && Date.now() - this.storage.tip.header.timestamp < emptyBlockIntervalMs
-      ) {
+      // Synchronization can commit pending work before this node's turn. Never
+      // create a new proposal when no transactions remain; historical empty
+      // blocks and persisted vote locks are still accepted and recovered.
+      if (this.storage.mempool.length === 0) {
         return;
       }
       const expected = this.genesis.validators[slot % this.genesis.validators.length];
@@ -566,14 +565,11 @@ export class NovaNode {
     const slot = Math.floor(now / this.genesis.blockTimeMs);
     const elapsed = now % this.genesis.blockTimeMs;
     const expected = this.genesis.validators[slot % this.genesis.validators.length];
-    const emptyBlockIntervalMs = this.config.emptyBlockIntervalMs ?? 30000;
-    const hasWork = this.storage.mempool.length > 0
-      || now - this.storage.tip.header.timestamp >= emptyBlockIntervalMs;
     if (
       elapsed >= this.config.proposalDelayMs
       && expected.address === this.key.address
       && this.storage.tip.header.slot < slot
-      && hasWork
+      && this.storage.mempool.length > 0
     ) {
       this.runBackground(() => this.produceForSlot(slot));
     }

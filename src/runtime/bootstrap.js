@@ -123,7 +123,6 @@ function initializeConfiguredNetwork({
         syncIntervalMs: 750,
         requestTimeoutMs: 1200,
         maxTransactionsPerBlock: 500,
-        emptyBlockIntervalMs: 30000,
         keyPasswordEnv: nodes[index].passwordEnv,
         peers: genesis.validators.filter((_, peerIndex) => peerIndex !== index).map(({ url }) => url),
       });

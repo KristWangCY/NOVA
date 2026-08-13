@@ -353,7 +353,11 @@ export default function Home() {
           <span className="panel-label">LATEST BLOCK</span>
           <strong>{overview ? overview.height.toLocaleString("en-US") : "—"}</strong>
           <div className="height-meta">
-            <span><i />{overview ? relativeTime(overview.latestBlockTime) : "等待连接"}</span>
+            <span><i />{overview
+              ? overview.mempoolSize === 0
+                ? `节点在线 · 正常空闲 · 最新区块 ${relativeTime(overview.latestBlockTime)}`
+                : `等待共识 · ${overview.mempoolSize} PENDING`
+              : "等待连接"}</span>
             <span>{overview ? `${overview.quorum}/${overview.validators} QUORUM` : "—"}</span>
           </div>
           <div className="hash-line">
